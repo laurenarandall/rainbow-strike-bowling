@@ -36,6 +36,10 @@ import { PhysicsMotionType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlug
 import { S, BALL_R, FOUL_Z, PIN_Z_START, OIL_END_Z } from "./ballPhysics";
 import type { PinStyleId } from "../gear";
 import type { BallFinish } from "../characters";
+import type { ThemeDef, LaneMode } from "../themes";
+import { getTheme } from "../themes";
+import { buildBackdrop, drawHeroShield } from "./backdrop";
+import type { Backdrop } from "./backdrop";
 
 export interface BallLook {
   id: string;
@@ -183,6 +187,16 @@ function paintBall(look: BallLook, c: CanvasRenderingContext2D, w: number, h: nu
       c.arc(Math.random() * w, Math.random() * h, s, 0, Math.PI * 2);
       c.fill();
     }
+  } else if (f === "emblem") {
+    // Red cape stripe around the middle + original shield emblems
+    c.fillStyle = acc[0] ?? "#dc2626";
+    c.fillRect(0, h * 0.44, w, h * 0.12);
+    for (const cx of [0.25, 0.75]) {
+      c.save();
+      c.translate(w * cx - 45, h * 0.5 - 40);
+      drawHeroShield(c, 90, 80);
+      c.restore();
+    }
   } else if (f === "spots") {
     for (let k = 0; k < 70; k++) {
       c.fillStyle = acc[k % acc.length]!;
@@ -262,9 +276,11 @@ export interface World {
   quality: () => Quality;
   addStaticPhysics: () => void;
   makeBallBody: () => PhysicsBody;
+  backdrop: Backdrop;
 }
 
-export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef: BallLook, pinStyle: PinStyleId, ballMass: number, startQuality: Quality): World {
+export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef: BallLook, pinStyle: PinStyleId, ballMass: number, startQuality: Quality, themeIn?: ThemeDef, laneMode: LaneMode = "theme"): World {
+  const theme = themeIn ?? getTheme("rainbow");
   scene.clearColor.set(0.53, 0.78, 1, 1);
   scene.imageProcessingConfiguration.toneMappingEnabled = true;
   scene.imageProcessingConfiguration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
@@ -272,10 +288,11 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
 
   // ---- Lights ----
   const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
-  hemi.intensity = 0.35;
+  hemi.intensity = theme.light.hemi;
   hemi.groundColor = new Color3(0.35, 0.3, 0.4);
   const sun = new DirectionalLight("sun", new Vector3(-0.35, -1, -0.45).normalize(), scene);
-  sun.intensity = 2.4;
+  sun.intensity = theme.light.sunIntensity;
+  sun.diffuse = Color3.FromHexString(theme.light.sun);
   sun.autoUpdateExtends = false;
   sun.orthoLeft = -11;
   sun.orthoRight = 11;
@@ -302,39 +319,42 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
   const glow = new GlowLayer("glow", scene, { mainTextureSamples: 2, blurKernelSize: 48 });
   glow.intensity = 0.7;
 
-  // ---- Sky dome (also used to bake the environment reflections) ----
-  const sky = MeshBuilder.CreateSphere("sky", { diameter: 400, segments: 24, sideOrientation: Mesh.BACKSIDE }, scene);
-  const skyMat = new StandardMaterial("skyMat", scene);
-  skyMat.disableLighting = true;
-  skyMat.emissiveTexture = canvasTex(scene, "skyTex", 16, 256, (c, w, h) => {
-    const g = c.createLinearGradient(0, 0, 0, h);
-    g.addColorStop(0, "#3a8bff");
-    g.addColorStop(0.42, "#9fd3ff");
-    g.addColorStop(0.5, "#fff6e8");
-    g.addColorStop(0.53, "#bde8b0");
-    g.addColorStop(1, "#4f9a52");
-    c.fillStyle = g;
-    c.fillRect(0, 0, w, h);
-  });
-  skyMat.backFaceCulling = false;
-  sky.material = skyMat;
-  sky.isPickable = false;
-  sky.infiniteDistance = true;
-
-  // ---- Ground around the lane ----
-  const floor = MeshBuilder.CreateGround("floor", { width: 140, height: 200 }, scene);
-  floor.position.set(0, -0.6, -40);
-  const floorMat = pbr(scene, "floorMat", "#59b85e", 0.9);
-  floor.material = floorMat;
-  floor.receiveShadows = true;
+  // ---- Theme background: sky dome, ground and props (also baked into the env map) ----
+  const backdrop = buildBackdrop(scene, theme, glow);
+  const { sky, floor } = backdrop;
 
   // ---- Lane: glossy maple boards with an oil sheen ----
   const LANE_LEN = FOUL_Z - DECK_END;
   const lane = MeshBuilder.CreateBox("lane", { width: LANE_W, height: 0.4, depth: LANE_LEN }, scene);
   lane.position.set(0, -0.2, (FOUL_Z + DECK_END) / 2);
   const laneMat = new PBRMaterial("laneMat", scene);
-  const woodTex = canvasTex(scene, "wood", 512, 1024, (c, w, h) => {
+  const rainbowLane = laneMode !== "wood";
+  // Painted with a transpose so boards run down the lane (u runs along the lane).
+  const woodTex = canvasTex(scene, "wood", 1024, 512, (c, w0, h0) => {
+    c.setTransform(0, 1, 1, 0, 0, 0);
+    const w = h0, h = w0;
     const boards = 39;
+    if (rainbowLane) {
+      // Glossy candy-colored boards in bands across the lane, with grain.
+      const cols = theme.lane;
+      for (let b = 0; b < boards; b++) {
+        const x0 = Math.floor((b / boards) * w);
+        const x1 = Math.floor(((b + 1) / boards) * w);
+        c.fillStyle = cols[Math.min(cols.length - 1, Math.floor((b / boards) * cols.length))]!;
+        c.fillRect(x0, 0, x1 - x0, h);
+        c.fillStyle = `rgba(255,255,255,${Math.random() * 0.06})`;
+        c.fillRect(x0, 0, x1 - x0, h);
+        for (let k = 0; k < 30; k++) {
+          c.fillStyle = Math.random() < 0.5 ? `rgba(255,255,255,${0.05 + Math.random() * 0.08})` : `rgba(0,0,0,${0.03 + Math.random() * 0.06})`;
+          c.fillRect(x0 + Math.random() * (x1 - x0), 0, 1, h);
+        }
+        c.fillStyle = "rgba(0,0,0,0.22)";
+        c.fillRect(x0, 0, 1, h);
+      }
+      c.fillStyle = "rgba(255,255,255,0.35)";
+      c.fillRect(0, h * 0.04, w, 2);
+      return;
+    }
     for (let b = 0; b < boards; b++) {
       const x0 = Math.floor((b / boards) * w);
       const x1 = Math.floor(((b + 1) / boards) * w);
@@ -353,8 +373,8 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
     c.fillStyle = "rgba(120,70,30,0.25)";
     c.fillRect(0, h * 0.04, w, 2);
   });
-  woodTex.wrapV = Texture.WRAP_ADDRESSMODE;
-  woodTex.vScale = 3;
+  woodTex.wrapU = Texture.WRAP_ADDRESSMODE;
+  woodTex.uScale = 3;
   laneMat.albedoTexture = woodTex;
   laneMat.roughness = 0.18;
   laneMat.metallic = 0;
@@ -384,8 +404,9 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
     a.rotation.y = Math.PI / 2;
     a.scaling.set(0.55, 1.8, 1);
     a.position.set(k * (LANE_W / 8), 0.006, arrowZ - Math.abs(k) * 0.55);
-    const m = pbr(scene, `laneArrowMat${k}`, RAINBOW[k + 3]!, 0.3);
-    m.emissiveColor = Color3.FromHexString(RAINBOW[k + 3]!).scale(0.35);
+    const arrowHex = rainbowLane ? theme.arrows : RAINBOW[k + 3]!;
+    const m = pbr(scene, `laneArrowMat${k}`, arrowHex, 0.3);
+    m.emissiveColor = Color3.FromHexString(arrowHex).scale(rainbowLane ? 0.7 : 0.35);
     a.material = m;
     a.receiveShadows = true;
   }
@@ -395,7 +416,8 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
       const dot = MeshBuilder.CreateDisc(`laneDot${zz}${k}`, { radius: 0.06, tessellation: 12 }, scene);
       dot.rotation.x = Math.PI / 2;
       dot.position.set(k * (LANE_W / 9), 0.006, zz);
-      const m = pbr(scene, `laneDotMat${zz}${k}`, "#3b2a1a", 0.4);
+      const m = pbr(scene, `laneDotMat${zz}${k}`, rainbowLane ? "#ffffff" : "#3b2a1a", 0.4);
+      if (rainbowLane) m.emissiveColor = new Color3(0.5, 0.5, 0.5);
       dot.material = m;
     }
   }
@@ -455,13 +477,28 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
 
   // ---- Rainbow Strike Castle around the pin area ----
   const castle: Mesh[] = [];
-  const castleMats = RAINBOW.map((hex, i) => {
-    const m = pbr(scene, `castle${i}`, hex, 0.38);
-    m.clearCoat.isEnabled = true;
-    m.clearCoat.intensity = 0.6;
+  const cstyle = theme.castle.style;
+  const castleMats = theme.castle.colors.map((hex, i) => {
+    const m = pbr(scene, `castle${i}`, hex, cstyle === "fortress" ? 0.55 : 0.24);
+    m.clearCoat.isEnabled = cstyle !== "fortress";
+    m.clearCoat.intensity = 1;
+    m.clearCoat.roughness = 0.05;
+    if (cstyle === "crystal") m.emissiveColor = Color3.FromHexString(hex).scale(0.15);
     return m;
   });
-  const stone = pbr(scene, "castleStone", "#f4efff", 0.5);
+  const stone = pbr(scene, "castleStone", theme.castle.stone, cstyle === "fortress" ? 0.7 : 0.3);
+  if (cstyle === "crystal") {
+    stone.alpha = 0.82;
+    stone.roughness = 0.05;
+    stone.metallic = 0.15;
+    stone.emissiveColor = Color3.FromHexString(theme.castle.stone).scale(0.25);
+  } else if (cstyle === "rainbow") {
+    stone.clearCoat.isEnabled = true;
+  }
+  const lavaGlow = new StandardMaterial("castleLavaGlow", scene);
+  lavaGlow.emissiveColor = Color3.FromHexString(theme.castle.gate);
+  lavaGlow.disableLighting = true;
+  const goldTrim = pbr(scene, "castleGold", "#ffcf4a", 0.2, 1);
   const kickH = 3.2;
   for (const side of [-1, 1]) {
     // Kickback walls: brick courses in rainbow colors
@@ -474,7 +511,7 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
     // Towers
     const tx = side * (KICK_X + 1.6);
     const tz = PIN_Z_START + 2.2;
-    const tower = MeshBuilder.CreateCylinder(`tower${side}`, { height: 7.5, diameter: 2.4, tessellation: 32 }, scene);
+    const tower = MeshBuilder.CreateCylinder(`tower${side}`, { height: 7.5, diameter: 2.4, tessellation: cstyle === "fortress" ? 8 : cstyle === "crystal" ? 6 : 32 }, scene);
     tower.position.set(tx, 3.2, tz);
     tower.material = stone;
     castle.push(tower);
@@ -492,10 +529,40 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
       cren.material = castleMats[k % 7]!;
       castle.push(cren);
     }
-    const roof = MeshBuilder.CreateCylinder(`roof${side}`, { height: 3, diameterTop: 0, diameterBottom: 2.9, tessellation: 32 }, scene);
-    roof.position.set(tx, 9.0, tz);
-    roof.material = castleMats[side < 0 ? 0 : 5]!;
+    const roof = MeshBuilder.CreateCylinder(`roof${side}`, { height: cstyle === "rainbow" ? 3 : 4, diameterTop: 0, diameterBottom: 2.9, tessellation: cstyle === "fortress" ? 8 : cstyle === "crystal" ? 6 : 32 }, scene);
+    roof.position.set(tx, cstyle === "rainbow" ? 9.0 : 9.5, tz);
+    roof.material = cstyle === "fortress" ? pbr(scene, `roofLava${side}`, "#7f1d1d", 0.5) : castleMats[side < 0 ? 0 : 5]!;
     castle.push(roof);
+    if (cstyle === "rainbow") {
+      const fin = MeshBuilder.CreateSphere(`finial${side}`, { diameter: 0.4, segments: 16 }, scene);
+      fin.position.set(tx, 10.6, tz);
+      fin.material = goldTrim;
+    } else if (cstyle === "fortress") {
+      // Spiky crown + glowing lava windows
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const sp = MeshBuilder.CreateCylinder(`spike${side}${k}`, { height: 0.9, diameterTop: 0, diameterBottom: 0.32, tessellation: 8 }, scene);
+        sp.position.set(tx + Math.cos(a) * 1.15, 7.95, tz + Math.sin(a) * 1.15);
+        sp.material = pbr(scene, `spikeMat${side}${k}`, "#e5e7eb", 0.3, 0.6);
+      }
+      for (let k = 0; k < 3; k++) {
+        const win = MeshBuilder.CreatePlane(`lavaWin${side}${k}`, { width: 0.4, height: 0.7 }, scene);
+        win.position.set(tx, 1.6 + k * 2, tz + 1.22);
+        win.rotation.y = Math.PI;
+        win.material = lavaGlow;
+        glow.addIncludedOnlyMesh(win);
+      }
+    } else {
+      for (let k = 0; k < 5; k++) {
+        const a = (k / 5) * Math.PI * 2;
+        const cr = MeshBuilder.CreateCylinder(`shard${side}${k}`, { height: 2.2, diameterTop: 0, diameterBottom: 0.6, tessellation: 6 }, scene);
+        cr.position.set(tx + Math.cos(a) * 1.1, 8.2, tz + Math.sin(a) * 1.1);
+        cr.rotation.z = Math.cos(a) * 0.35;
+        cr.rotation.x = -Math.sin(a) * 0.35;
+        cr.material = stone;
+        glow.addIncludedOnlyMesh(cr);
+      }
+    }
     const flag = MeshBuilder.CreatePlane(`flag${side}`, { width: 1.2, height: 0.7, sideOrientation: Mesh.DOUBLESIDE }, scene);
     flag.position.set(tx + side * 0.6, 11.1, tz);
     flag.material = castleMats[side < 0 ? 2 : 4]!;
@@ -516,6 +583,15 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
     cren.position.set((k - 4) * 1.0, maskY + 7 * 0.34 + 0.3, PIN_Z_START + 1.6);
     cren.material = castleMats[k % 7]!;
     castle.push(cren);
+    if (cstyle !== "rainbow") {
+      const sp = MeshBuilder.CreateCylinder(`mspike${k}`, { height: 0.7, diameterTop: 0, diameterBottom: 0.36, tessellation: cstyle === "crystal" ? 6 : 8 }, scene);
+      sp.position.set((k - 4) * 1.0, maskY + 7 * 0.34 + 0.95, PIN_Z_START + 1.6);
+      sp.material = cstyle === "crystal" ? stone : pbr(scene, `mspikeMat${k}`, "#e5e7eb", 0.3, 0.6);
+    } else {
+      const gem = MeshBuilder.CreateSphere(`mgem${k}`, { diameter: 0.24, segments: 12 }, scene);
+      gem.position.set((k - 4) * 1.0, maskY + 7 * 0.34 + 0.7, PIN_Z_START + 1.6);
+      gem.material = goldTrim;
+    }
   }
   // Big "RAINBOW STRIKE" sign on the masking panel
   const sign = MeshBuilder.CreatePlane("sign", { width: 5.2, height: 1.1 }, scene);
@@ -528,11 +604,13 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
     c.textBaseline = "middle";
     c.lineWidth = 16;
     c.strokeStyle = "#ffffff";
-    c.strokeText("RAINBOW STRIKE", w / 2, h / 2 + 8);
+    const text = theme.castle.sign;
+    c.strokeText(text, w / 2, h / 2 + 8);
     const g = c.createLinearGradient(0, 0, w, 0);
-    RAINBOW.forEach((hex, i) => g.addColorStop(i / 6, hex));
+    const sc = theme.castle.signColors;
+    sc.forEach((hex, i) => g.addColorStop(i / Math.max(1, sc.length - 1), hex));
     c.fillStyle = g;
-    c.fillText("RAINBOW STRIKE", w / 2, h / 2 + 8);
+    c.fillText(text, w / 2, h / 2 + 8);
   });
   signTex.hasAlpha = true;
   signMat.diffuseTexture = signTex;
@@ -554,7 +632,7 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
   gate.position.set(0, PIT_Y + 2.2, backZ + 0.05);
   gate.rotation.y = Math.PI;
   const gateMat = new StandardMaterial("gateMat", scene);
-  gateMat.emissiveColor = new Color3(1, 0.78, 0.2);
+  gateMat.emissiveColor = Color3.FromHexString(theme.castle.gate);
   gateMat.disableLighting = true;
   gate.material = gateMat;
   const lintel = MeshBuilder.CreateBox("lintel", { width: 3.4, height: 1, depth: 0.8 }, scene);
@@ -581,7 +659,8 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
   // ---- Environment: bake the sky + castle into a cube map for PBR reflections ----
   const probe = new ReflectionProbe("envProbe", 128, scene, true, true);
   probe.position = new Vector3(0, 2, PIN_Z_START + 12);
-  probe.renderList?.push(sky, floor, ...castle);
+  probe.renderList?.push(...backdrop.envMeshes, ...castle);
+  void sky; void floor;
   probe.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
   // Don't sample the env map while baking it (avoids a GL feedback loop).
   probe.cubeTexture.onBeforeRenderObservable.add(() => { scene.environmentTexture = null; });
@@ -630,7 +709,24 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
     return pinHull;
   }
   const studMat = pinStyle === "lego" ? pbr(scene, "pinStudMat", "#ff3b3b", 0.35) : null;
+  const friendProtos: Mesh[] = [];
   function makePin(i: number): Mesh {
+    if (pinStyle === "mushroom") {
+      if (!friendProtos.length) for (let t = 0; t < 6; t++) friendProtos.push(buildFriendProto(scene, template, t));
+      const proto = friendProtos[FRIEND_ORDER[i % FRIEND_ORDER.length]!]!;
+      const fm = proto.clone(`pin${i}`, null, false)!;
+      fm.setEnabled(true);
+      fm.isVisible = false;
+      fm.position.copyFrom(PIN_SPOTS[i]!);
+      fm.rotationQuaternion = Quaternion.RotationAxis(Vector3.Up(), (Math.random() - 0.5) * 0.5);
+      const kids = fm.getChildMeshes(false) as Mesh[];
+      for (const k of kids) { k.receiveShadows = true; mirrorList.push(k); }
+      shadowGen.addShadowCaster(fm, true);
+      fm.onDisposeObservable.addOnce(() => {
+        for (const k of kids) { const j = mirrorList.indexOf(k); if (j >= 0) mirrorList.splice(j, 1); }
+      });
+      return fm;
+    }
     const m = template.clone(`pin${i}`, null, true)!;
     m.setEnabled(true);
     m.position.copyFrom(PIN_SPOTS[i]!);
@@ -792,7 +888,7 @@ export function buildWorld(scene: Scene, engine: Engine, camera: Camera, ballDef
 
   return {
     shadowGen, sun, glow, get mirror() { return mirror; }, ball, ballMass, bumperMeshes, bridgePivot, getPinHull, makePin,
-    setShadowFocus, setQuality, quality: () => q, addStaticPhysics, makeBallBody,
+    setShadowFocus, setQuality, quality: () => q, addStaticPhysics, makeBallBody, backdrop,
   };
 }
 
@@ -856,4 +952,176 @@ function makeBallMaterial(scene: Scene, b: BallLook): PBRMaterial {
     m.clearCoat.intensity = 0.4;
   }
   return m;
+}
+
+// ---------- "Mushroom Friends" pins (original designs from simple shapes) ----------
+// 0 red spotted mushroom, 1 green spotted mushroom, 2 gold star-face pin,
+// 3 spiky shell critter, 4 grumpy brown mushroom, 5 little ghost.
+const FRIEND_ORDER = [2, 0, 1, 4, 3, 5, 0, 1, 4, 3];
+const friendMats = new WeakMap<Scene, Record<string, PBRMaterial>>();
+function fmat(scene: Scene, key: string, hex: string, rough = 0.25, metal = 0, emissive = 0): PBRMaterial {
+  let reg = friendMats.get(scene);
+  if (!reg) { reg = {}; friendMats.set(scene, reg); }
+  const hit = reg[key];
+  if (hit) return hit;
+  const m = pbr(scene, `friend_${key}`, hex, rough, metal);
+  m.clearCoat.isEnabled = metal < 0.5;
+  m.clearCoat.intensity = 0.8;
+  if (emissive > 0) m.emissiveColor = Color3.FromHexString(hex).scale(emissive);
+  reg[key] = m;
+  return m;
+}
+function buildFriendProto(scene: Scene, template: Mesh, type: number): Mesh {
+  const root = template.clone(`friendProto${type}`, null, true)!;
+  root.isVisible = false;
+  root.setEnabled(false);
+  root.rotationQuaternion = Quaternion.Identity();
+  const part = (m: Mesh, mat: PBRMaterial, x: number, y: number, z: number) => {
+    m.parent = root;
+    m.position.set(x, y, z);
+    m.material = mat;
+    return m;
+  };
+  const sph = (n: string, d: number, seg = 16, slice?: number) =>
+    MeshBuilder.CreateSphere(`${n}${type}`, slice ? { diameter: d, segments: seg, slice } : { diameter: d, segments: seg }, scene);
+  const cream = fmat(scene, "cream", "#fde9c9", 0.35);
+  const black = fmat(scene, "black", "#141414", 0.2);
+  const white = fmat(scene, "white", "#ffffff", 0.25);
+  const ovalEyes = (y: number, z: number, gap = 0.085, size = 0.16) => {
+    for (const s of [-1, 1]) {
+      const e = sph("eye", size, 12);
+      e.scaling.set(0.55, 1, 0.45);
+      part(e, black, s * gap, y, z);
+      const hl = sph("eyeHl", size * 0.3, 8);
+      part(hl, white, s * gap + 0.012, y + size * 0.22, z + size * 0.07);
+    }
+  };
+  const roundEyes = (y: number, z: number, gap = 0.08, size = 0.13) => {
+    for (const s of [-1, 1]) {
+      const e = sph("eyeW", size, 12);
+      e.scaling.z = 0.6;
+      part(e, white, s * gap, y, z);
+      const p = sph("eyeP", size * 0.5, 10);
+      part(p, black, s * gap, y, z + size * 0.27);
+    }
+  };
+  if (type === 0 || type === 1) {
+    const stem = MeshBuilder.CreateCylinder(`stem${type}`, { height: 1.25, diameterTop: 0.44, diameterBottom: 0.56, tessellation: 24 }, scene);
+    part(stem, cream, 0, 0.625, 0);
+    ovalEyes(0.9, 0.235);
+    const capMat = type === 0 ? fmat(scene, "redCap", "#e52521", 0.2) : fmat(scene, "greenCap", "#2fbf4a", 0.2);
+    const cap = sph("cap", 0.95, 24, 0.5);
+    cap.scaling.y = 1.05;
+    part(cap, capMat, 0, 1.2, 0);
+    const under = MeshBuilder.CreateDisc(`under${type}`, { radius: 0.475, tessellation: 24 }, scene);
+    under.rotation.x = -Math.PI / 2;
+    part(under, fmat(scene, "gill", "#f3d2a2", 0.6), 0, 1.2, 0);
+    const spots: [number, number][] = [[0, 0.5], [0.9, 0.25], [-0.9, 0.25], [2.2, 0.75], [-2.2, 0.75], [3.14, 0.35], [0, 1.25]];
+    for (const [az, el] of spots) {
+      const sp = sph("spot", 0.24, 12);
+      sp.scaling.y = 0.35;
+      const r = 0.475, ry = 0.5;
+      const pos = new Vector3(Math.sin(az) * Math.cos(el) * r, Math.sin(el) * ry, Math.cos(az) * Math.cos(el) * r);
+      part(sp, white, pos.x, 1.2 + pos.y, pos.z);
+      sp.lookAt(sp.position.add(new Vector3(pos.x, pos.y * 0.6, pos.z)), 0, Math.PI / 2, 0);
+    }
+  } else if (type === 2) {
+    const body = template.clone(`goldBody${type}`, null, true)!;
+    body.isVisible = true;
+    body.rotationQuaternion = null;
+    body.setEnabled(true);
+    part(body, fmat(scene, "gold", "#ffcf3a", 0.15, 1), 0, 0, 0);
+    // Star face on the head
+    const star = new TransformNode(`star${type}`, scene);
+    star.parent = root;
+    star.position.set(0, 1.45, 0.17);
+    const starMat = fmat(scene, "star", "#ffe14a", 0.2, 0.3, 0.45);
+    const core = MeshBuilder.CreateCylinder(`starCore${type}`, { height: 0.08, diameter: 0.2, tessellation: 10 }, scene);
+    core.rotation.x = Math.PI / 2;
+    core.parent = star;
+    core.material = starMat;
+    for (let k = 0; k < 5; k++) {
+      const a = (k / 5) * Math.PI * 2;
+      const arm = MeshBuilder.CreateCylinder(`starArm${type}${k}`, { height: 0.2, diameterTop: 0, diameterBottom: 0.13, tessellation: 4 }, scene);
+      arm.parent = star;
+      arm.position.set(-Math.sin(a) * 0.14, Math.cos(a) * 0.14, 0);
+      arm.rotation.z = a;
+      arm.scaling.z = 0.4;
+      arm.material = starMat;
+    }
+    for (const s of [-1, 1]) {
+      const e = sph("starEye", 0.06, 8);
+      e.scaling.set(0.6, 1, 0.5);
+      e.parent = star;
+      e.position.set(s * 0.035, 0.01, 0.04);
+      e.material = black;
+    }
+  } else if (type === 3) {
+    const bodyMat = fmat(scene, "shellBody", "#ffd166", 0.3);
+    const legs = MeshBuilder.CreateCylinder(`shellLegs${type}`, { height: 0.55, diameter: 0.46, tessellation: 20 }, scene);
+    part(legs, bodyMat, 0, 0.275, 0);
+    const shell = sph("shell", 0.8, 24);
+    shell.scaling.set(1, 1.05, 0.95);
+    part(shell, fmat(scene, "shell", "#2f9e44", 0.2), 0, 0.85, -0.03);
+    const rim = MeshBuilder.CreateTorus(`shellRim${type}`, { diameter: 0.74, thickness: 0.1, tessellation: 28 }, scene);
+    part(rim, fmat(scene, "shellRim", "#fff3c4", 0.3), 0, 0.55, -0.03);
+    const spikeMat = white;
+    const dirs: [number, number][] = [[0, 1.2], [1.6, 0.55], [-1.6, 0.55], [3.14, 0.6], [0.8, 0.35], [-0.8, 0.35], [2.4, 0.4], [-2.4, 0.4]];
+    for (const [az, el] of dirs) {
+      const n = new Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+      const sp = MeshBuilder.CreateCylinder(`shellSpike${type}`, { height: 0.24, diameterTop: 0, diameterBottom: 0.14, tessellation: 8 }, scene);
+      part(sp, spikeMat, n.x * 0.4, 0.85 + n.y * 0.42, -0.03 + n.z * 0.38);
+      sp.rotationQuaternion = Quaternion.FromUnitVectorsToRef(Vector3.Up(), n, new Quaternion());
+    }
+    const head = sph("shellHead", 0.42, 18);
+    part(head, bodyMat, 0, 1.45, 0.06);
+    roundEyes(1.5, 0.24, 0.07, 0.12);
+  } else if (type === 4) {
+    const stem = MeshBuilder.CreateCylinder(`gStem${type}`, { height: 0.7, diameterTop: 0.5, diameterBottom: 0.56, tessellation: 20 }, scene);
+    part(stem, cream, 0, 0.35, 0);
+    const head = sph("gHead", 1.0, 24, 0.5);
+    head.scaling.y = 1.55;
+    part(head, fmat(scene, "brownCap", "#9a5a2b", 0.3), 0, 0.62, 0);
+    const under = MeshBuilder.CreateDisc(`gUnder${type}`, { radius: 0.5, tessellation: 24 }, scene);
+    under.rotation.x = -Math.PI / 2;
+    part(under, fmat(scene, "gUnder", "#f3d2a2", 0.6), 0, 0.62, 0);
+    roundEyes(1.0, 0.43, 0.12, 0.17);
+    const brow = fmat(scene, "brow", "#2b160a", 0.4);
+    for (const s of [-1, 1]) {
+      const b = MeshBuilder.CreateBox(`brow${type}`, { width: 0.2, height: 0.05, depth: 0.05 }, scene);
+      part(b, brow, s * 0.12, 1.15, 0.44);
+      b.rotation.z = s * 0.45;
+      const fang = MeshBuilder.CreateCylinder(`fang${type}`, { height: 0.07, diameterTop: 0, diameterBottom: 0.05, tessellation: 6 }, scene);
+      fang.rotation.x = Math.PI;
+      part(fang, white, s * 0.07, 0.72, 0.47);
+      const foot = sph("foot", 0.3, 12);
+      foot.scaling.set(1, 0.5, 1.3);
+      part(foot, fmat(scene, "foot", "#4a2a12", 0.5), s * 0.16, 0.06, 0.08);
+    }
+  } else {
+    const ghost = fmat(scene, "ghost", "#f8fafc", 0.3, 0, 0.35);
+    ghost.alpha = 0.92;
+    const body = MeshBuilder.CreateCylinder(`ghostBody${type}`, { height: 1.2, diameterTop: 0.62, diameterBottom: 0.5, tessellation: 24 }, scene);
+    part(body, ghost, 0, 0.7, 0);
+    const top = sph("ghostTop", 0.62, 20, 0.5);
+    part(top, ghost, 0, 1.3, 0);
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2;
+      const scallop = sph("ghostHem", 0.2, 10);
+      part(scallop, ghost, Math.cos(a) * 0.2, 0.1, Math.sin(a) * 0.2);
+    }
+    ovalEyes(1.32, 0.29, 0.09, 0.15);
+    const mouth = sph("ghostMouth", 0.12, 10);
+    mouth.scaling.set(1, 0.7, 0.4);
+    part(mouth, fmat(scene, "ghostMouth", "#ff7aa8", 0.4), 0, 1.13, 0.3);
+    for (const s of [-1, 1]) {
+      const arm = sph("ghostArm", 0.18, 10);
+      arm.scaling.set(1, 0.7, 0.8);
+      part(arm, ghost, s * 0.33, 0.95, 0.05);
+      const blush = sph("blush", 0.08, 8);
+      blush.scaling.z = 0.3;
+      part(blush, fmat(scene, "blush", "#ffb3c7", 0.5), s * 0.17, 1.2, 0.29);
+    }
+  }
+  return root;
 }

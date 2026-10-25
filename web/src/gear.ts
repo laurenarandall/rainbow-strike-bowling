@@ -1,6 +1,6 @@
 // Pin style choices (balls live in characters.ts). Pure data so it can be unit tested and shown in the UI.
 
-export type PinStyleId = "classic" | "rainbow" | "lego" | "gold" | "neon";
+export type PinStyleId = "classic" | "rainbow" | "lego" | "gold" | "neon" | "mushroom";
 
 export interface PinStyleDef {
   id: PinStyleId;
@@ -21,6 +21,8 @@ export const PIN_STYLES: PinStyleDef[] = [
     preview: "linear-gradient(120deg,#fff6c2,#f5c542 30%,#b8860b 60%,#ffe680)" },
   { id: "neon", name: "Neon Glow", emoji: "✨", blurb: "Glow-in-the-dark",
     preview: "linear-gradient(180deg,#39ff14,#00e5ff 50%,#ff2bd6)" },
+  { id: "mushroom", name: "Mushroom Friends", emoji: "🍄", blurb: "Spotted mushrooms, star pins and cute critters",
+    preview: "radial-gradient(circle at 35% 20%,#fff 0 9%,transparent 10%),radial-gradient(circle at 65% 26%,#fff 0 8%,transparent 9%),linear-gradient(180deg,#e52521 0 36%,#fde9c9 36%)" },
 ];
 
 /** Real bowling ball and pin masses (kg). */

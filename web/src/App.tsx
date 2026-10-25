@@ -10,6 +10,8 @@ import type { FrameStars } from "./components/Game";
 import { CHARACTERS, BALLS, ballFeel } from "./characters";
 import type { Character, BallSkin } from "./characters";
 import { PIN_STYLES, loadPinStyleId, savePinStyleId } from "./gear";
+import { THEMES, getTheme, loadThemeId, saveThemeId, loadLaneMode, saveLaneMode } from "./themes";
+import type { ThemeId, LaneMode } from "./themes";
 import type { PinStyleId } from "./gear";
 import type { GamePhase } from "./types";
 
@@ -189,6 +191,8 @@ function ballPreview(b: BallSkin, hero: Character): string {
       return `${shine}, linear-gradient(135deg, #ffffff, ${b.ballColor} 45%, ${a1} 80%)`;
     case "spots":
       return `${shine}, radial-gradient(circle at 35% 65%, ${a0} 0 12%, transparent 13%), radial-gradient(circle at 70% 45%, ${a1} 0 10%, transparent 11%), ${b.ballColor}`;
+    case "emblem":
+      return `${shine}, linear-gradient(180deg, transparent 0 44%, ${a0} 44% 56%, transparent 56%), radial-gradient(circle at 50% 50%, ${a1} 0 18%, transparent 19%), ${b.ballColor}`;
     case "scales":
       return `${shine}, radial-gradient(circle at 50% 50%, transparent 0 40%, ${a0} 41% 44%, transparent 45%) 0 0/12px 12px, ${b.ballColor}`;
   }
@@ -204,8 +208,9 @@ function PickerRow({ title, children }: { title: string; children: ReactNode }) 
 }
 
 function StartScreen({
-  onPick, bumpers, setBumpers, onTrophies, best, ball, setBall, pinStyle, setPinStyle,
+  onPick, bumpers, setBumpers, onTrophies, best, ball, setBall, pinStyle, setPinStyle, theme, setTheme, laneMode, setLaneMode,
 }: {
+  theme: ThemeId; setTheme: (t: ThemeId) => void; laneMode: LaneMode; setLaneMode: (m: LaneMode) => void;
   onPick: (c: Character) => void; bumpers: boolean; setBumpers: (b: boolean) => void; onTrophies: () => void; best: number;
   ball: BallSkin; setBall: (b: BallSkin) => void; pinStyle: PinStyleId; setPinStyle: (p: PinStyleId) => void;
 }) {
@@ -227,6 +232,29 @@ function StartScreen({
       >
         🏰 Rainbow Strike Bowling 🎳
       </h1>
+      <PickerRow title={`Pick your world: ${getTheme(theme).name}`}>
+        {THEMES.map((t) => {
+          const on = t.id === theme;
+          return (
+            <button
+              key={t.id}
+              data-testid={`theme-${t.id}`}
+              onClick={() => setTheme(t.id)}
+              aria-pressed={on}
+              title={t.blurb}
+              className="flex flex-col items-center gap-1 rounded-2xl"
+              style={{
+                background: "#fff", cursor: "pointer", padding: 4, width: 118,
+                border: on ? "4px solid #7c3aed" : "4px solid #fff", boxShadow: on ? "0 0 0 3px #fde047" : "0 4px 0 rgba(0,0,0,0.12)",
+                transform: on ? "scale(1.07)" : "none", transition: "transform .15s",
+              }}
+            >
+              <span style={{ width: "100%", height: 54, borderRadius: 12, background: t.preview, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30 }}>{t.emoji}</span>
+              <span style={{ fontWeight: 900, fontSize: 12, color: "#1f2937", lineHeight: 1.1, textAlign: "center" }}>{t.name}</span>
+            </button>
+          );
+        })}
+      </PickerRow>
       <PickerRow title={`Pick your ball: ${ball.name} · ${feel.pounds} lb · ${hookWord}`}>
         {BALLS.map((b) => {
           const on = b.id === ball.id;
@@ -308,6 +336,14 @@ function StartScreen({
           {bumpers ? "🛡️ Bumpers: ON" : "🎯 Bumpers: OFF"}
         </button>
         <button
+          data-testid="lane-toggle"
+          onClick={() => setLaneMode(laneMode === "wood" ? "theme" : "wood")}
+          className="px-5 py-3 rounded-2xl font-black text-lg"
+          style={{ background: laneMode === "wood" ? "#d6a46b" : "linear-gradient(90deg,#ff3b3b,#ffd60a,#3ddc4a,#1fb6ff,#b14cff)", color: "#fff", border: "4px solid #fff", textShadow: "0 1px 2px rgba(0,0,0,0.5)" }}
+        >
+          {laneMode === "wood" ? "🪵 Lane: Classic Wood" : "🌈 Lane: Rainbow"}
+        </button>
+        <button
           data-testid="trophies-button"
           onClick={onTrophies}
           className="px-5 py-3 rounded-2xl font-black text-lg"
@@ -355,6 +391,18 @@ export default function App() {
     setPinStyleState(p);
     savePinStyleId(p);
   }, []);
+  const [theme, setThemeState] = useState<ThemeId>(loadThemeId);
+  const setTheme = useCallback((t: ThemeId) => {
+    setThemeState(t);
+    saveThemeId(t);
+    // A world brings its own favourite ball and pins (you can still change them).
+    const def = getTheme(t).defaults;
+    const b = BALLS.find((x) => x.id === def.ball);
+    if (b) setBall(b);
+    setPinStyle(def.pins);
+  }, [setBall, setPinStyle]);
+  const [laneMode, setLaneModeState] = useState<LaneMode>(loadLaneMode);
+  const setLaneMode = useCallback((m: LaneMode) => { setLaneModeState(m); saveLaneMode(m); }, []);
   const [showTrophies, setShowTrophies] = useState(false);
   const [newAwards, setNewAwards] = useState<string[]>([]);
   const fxRef = useRef<HTMLDivElement>(null);
@@ -508,12 +556,12 @@ export default function App() {
     >
       <div className="relative w-full h-full min-h-[400px]">
         {phase !== "menu" && (
-          <Game key={gameKey} character={character} ballSkin={ball} pinStyle={pinStyle} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
+          <Game key={gameKey} character={character} ballSkin={ball} pinStyle={pinStyle} theme={theme} laneMode={laneMode} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
         )}
         {phase === "playing" && <StarBoard frames={frames} current={frame} />}
         <SoundSync sfx={appSfx} />
         {phase === "menu" && (
-          <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} ball={ball} setBall={setBall} pinStyle={pinStyle} setPinStyle={setPinStyle} />
+          <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} ball={ball} setBall={setBall} pinStyle={pinStyle} setPinStyle={setPinStyle} theme={theme} setTheme={setTheme} laneMode={laneMode} setLaneMode={setLaneMode} />
         )}
         {showTrophies && <TrophyRoom profile={profile} onClose={() => setShowTrophies(false)} />}
         {phase === "over" && (

@@ -9,6 +9,10 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { TrailMesh } from "@babylonjs/core/Meshes/trailMesh";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import { getTheme } from "../themes";
+import type { ThemeId, LaneMode } from "../themes";
 import { SoundFX } from "../sound";
 import HavokPhysics from "@babylonjs/havok";
 import havokWasmUrl from "@babylonjs/havok/lib/esm/HavokPhysics.wasm?url";
@@ -50,6 +54,8 @@ interface GameProps {
   character?: Character;
   ballSkin?: BallSkin;
   pinStyle?: PinStyleId;
+  theme?: ThemeId;
+  laneMode?: LaneMode;
   bumpers?: boolean;
   onThrow?: (t: { pins: number; strike: boolean; spare: boolean; gutter: boolean; frame: number }) => void;
 }
@@ -124,7 +130,11 @@ function computeTotalScore(frames: FrameScore[]): number {
 
 type ThrowPhase = "aiming" | "power" | "spin" | "rolling" | "settling" | "done";
 
-export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinStyle = "classic", bumpers = false, onThrow }: GameProps) {
+export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinStyle = "classic", theme = "rainbow", laneMode = "theme", bumpers = false, onThrow }: GameProps) {
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  const laneModeRef = useRef(laneMode);
+  laneModeRef.current = laneMode;
   const ballSkinRef = useRef(ballSkin);
   ballSkinRef.current = ballSkin;
   const pinStyleRef = useRef(pinStyle);
@@ -204,7 +214,23 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
     const qParam = new URLSearchParams(window.location.search).get("q");
     const forcedQ = qParam === "0" || qParam === "1" || qParam === "2" ? (Number(qParam) as Quality) : null;
     const startQ: Quality = forcedQ ?? (coarse || window.innerWidth < 1000 ? 1 : 2);
-    const world = buildWorld(scene, engine, camera, look, pinStyleRef.current, ballMass, startQ);
+    const th = getTheme(themeRef.current);
+    const world = buildWorld(scene, engine, camera, look, pinStyleRef.current, ballMass, startQ, th, laneModeRef.current);
+    // Flying cape streak behind the ball (hero ball or hero theme).
+    const capeOn = feel.finish === "emblem" || th.id === "hero";
+    const capeNode = new TransformNode("capeNode", scene);
+    let cape: TrailMesh | null = null;
+    if (capeOn) {
+      cape = new TrailMesh("cape", capeNode, scene, 0.55, 46, true);
+      const cm = new StandardMaterial("capeMat", scene);
+      cm.emissiveColor = new Color3(0.9, 0.08, 0.1);
+      cm.diffuseColor = new Color3(0.8, 0.05, 0.08);
+      cm.alpha = 0.75;
+      cm.backFaceCulling = false;
+      cape.material = cm;
+    }
+    let capePhaseWasRolling = false;
+    let animT = 0;
     const { ball, bumperMeshes, bridgePivot } = world;
     let bridgeTarget = 0; // 0 = up (closed), 1 = down (open)
     let bridgeOpen = 0;
@@ -438,15 +464,28 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
     spinLabel.textContent = "SPIN";
     spinWrap.appendChild(spinLabel);
 
-    // Strike/spare overlay
+    // Strike/spare/pins pop-up: big, bouncy, rainbow-filled, outlined and glowing.
+    // Sits in the top band (over the sky/castle), never over the lane.
+    if (!document.getElementById("rsb-pop-style")) {
+      const st = document.createElement("style");
+      st.id = "rsb-pop-style";
+      st.textContent =
+        "@keyframes rsbPopIn{0%{transform:translate(-50%,0) scale(0) rotate(-10deg)}55%{transform:translate(-50%,0) scale(1.28) rotate(4deg)}75%{transform:translate(-50%,0) scale(0.92) rotate(-2deg)}100%{transform:translate(-50%,0) scale(1) rotate(0)}}" +
+        "@keyframes rsbWobble{0%,100%{transform:translate(-50%,0) scale(1) rotate(-2deg)}50%{transform:translate(-50%,0) scale(1.07) rotate(2deg)}}" +
+        "@keyframes rsbPopOut{0%{transform:translate(-50%,0) scale(1);opacity:1}100%{transform:translate(-50%,-30px) scale(1.35);opacity:0}}" +
+        "@keyframes rsbHue{0%{background-position:0% 50%}100%{background-position:200% 50%}}";
+      document.head.appendChild(st);
+    }
     const bigLabel = document.createElement("div");
     bigLabel.style.cssText =
-      "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(0);" +
-      "font-family:Fraunces,serif;font-size:clamp(40px,9vw,84px);font-weight:900;" +
-      "color:#fff;text-align:center;line-height:1.05;white-space:nowrap;" +
-      "-webkit-text-stroke:2px #7c3aed;" +
-      "text-shadow:0 0 24px rgba(255,255,255,0.8),4px 4px 0 #ff3b3b,8px 8px 0 #ffd60a,12px 12px 0 #1fb6ff;" +
-      "pointer-events:none;transition:transform 0.3s ease-out,opacity 0.5s;opacity:0;";
+      "position:absolute;top:13%;left:50%;transform:translate(-50%,0) scale(0);" +
+      "font-family:'Luckiest Guy',Fredoka,Fraunces,sans-serif;font-size:clamp(46px,10.5vw,118px);font-weight:900;" +
+      "text-align:center;line-height:1.02;white-space:nowrap;letter-spacing:0.02em;" +
+      "background:linear-gradient(90deg,#ff3b3b,#ff8c1a,#ffd60a,#3ddc4a,#1fb6ff,#b14cff,#ff3b3b);background-size:200% 100%;" +
+      "-webkit-background-clip:text;background-clip:text;color:transparent;" +
+      "-webkit-text-stroke:3px #ffffff;" +
+      "filter:drop-shadow(0 0 14px rgba(255,255,255,0.9)) drop-shadow(0 0 28px rgba(255,90,200,0.75)) drop-shadow(5px 6px 0 #4c1d95);" +
+      "pointer-events:none;opacity:0;z-index:30;";
     hudDiv.appendChild(bigLabel);
 
     let bigLabelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -456,16 +495,17 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
         const subEl = document.createElement("div");
         subEl.textContent = sub;
         subEl.style.cssText =
-          "font-size:0.55em;margin-top:8px;-webkit-text-stroke:1px #7c3aed;" +
-          "text-shadow:3px 3px 0 #ff8c1a,6px 6px 0 #3ddc4a;";
+          "font-size:0.42em;margin-top:6px;color:#fff;-webkit-text-stroke:2px #7c3aed;white-space:normal;max-width:92vw;" +
+          "text-shadow:3px 3px 0 #ff8c1a,6px 6px 0 #1fb6ff;";
         bigLabel.appendChild(subEl);
       }
-      bigLabel.style.transform = "translate(-50%,-50%) scale(1)";
       bigLabel.style.opacity = "1";
+      bigLabel.style.animation = "none";
+      void bigLabel.offsetWidth;
+      bigLabel.style.animation = "rsbPopIn 0.65s cubic-bezier(.2,1.5,.4,1) both, rsbWobble 1.3s ease-in-out 0.65s infinite, rsbHue 2.4s linear infinite";
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
       bigLabelTimer = setTimeout(() => {
-        bigLabel.style.transform = "translate(-50%,-50%) scale(1.2)";
-        bigLabel.style.opacity = "0";
+        bigLabel.style.animation = "rsbPopOut 0.45s ease-in both";
         bigLabelTimer = null;
       }, ms);
     }
@@ -745,22 +785,28 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       const totalDown = frame.throws.reduce((a, b) => a + b, 0);
       const isSpare = currentThrow === 1 && totalDown >= 10;
 
-      const pool = [...CHEERS, ...characterRef.current.cheers, ...characterRef.current.cheers, ...NAME_PHRASES];
+      const thm = getTheme(themeRef.current);
+      const pool = [...CHEERS, ...characterRef.current.cheers, ...characterRef.current.cheers, ...NAME_PHRASES, ...thm.cheers, ...thm.cheers];
+      if (thm.sfx === "coin" && newlyKnocked > 0) for (let k = 0; k < Math.min(newlyKnocked, 6); k++) setTimeout(() => sfx.coin(), 120 + k * 110);
       const cheer = pool[Math.floor(Math.random() * pool.length)]!;
       onThrowRef.current?.({ pins: newlyKnocked, strike: currentThrow === 0 && newlyKnocked === 10, spare: currentThrow === 1 && frame.throws.reduce((a, b) => a + b, 0) >= 10 && frame.throws[0] !== 10, gutter: guttered, frame: currentFrame + 1 });
       if (Math.random() < 0.6) floatPhrase(hudDiv);
       bridgeTarget = 0;
       if (isStrike) {
-        showBigLabel("🌈 STRIKE! 🌈", Math.random() < 0.4 ? characterRef.current.strikeCheer : pick(STRIKE_PHRASES), 2400);
-        setTimeout(() => floatPhrase(hudDiv, pick(STRIKE_PHRASES)), 700);
+        const r = Math.random();
+        showBigLabel(`${thm.emoji} STRIKE! ${thm.emoji}`, r < 0.35 ? characterRef.current.strikeCheer : r < 0.7 ? pick(thm.strikeCheers) : pick(STRIKE_PHRASES), 2600);
+        setTimeout(() => floatPhrase(hudDiv, pick([...STRIKE_PHRASES, ...thm.strikeCheers])), 700);
         bridgeTarget = 1;
         sfx.strike();
+        if (thm.sfx === "coin") setTimeout(() => sfx.powerUp(), 900);
+        else if (thm.sfx === "hero") setTimeout(() => sfx.heroFanfare(), 700);
         confetti(260);
         fireworks(hudDiv, 12, 2600);
         animalDisco(hudDiv, 4200);
       } else if (isSpare) {
-        showBigLabel("✨ SPARE! ✨", pick(SPARE_PHRASES), 2000);
+        showBigLabel("✨ SPARE! ✨", pick(SPARE_PHRASES), 2200);
         sfx.spare();
+        if (thm.sfx === "hero") setTimeout(() => sfx.heroFanfare(), 600);
         confetti(140);
         fireworks(hudDiv, 6, 1800);
         animalDisco(hudDiv, 3200);
@@ -920,7 +966,8 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       fireworks(hudDiv, 12, 2600);
       animalDisco(hudDiv, 4200);
       floatPhrase(hudDiv);
-      showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 4000);
+      const thc = getTheme(themeRef.current);
+      showBigLabel(`${thc.emoji} STRIKE! ${thc.emoji}`, pick(thc.strikeCheers), 4000);
     };
     (window as unknown as { __rsbThrow?: typeof scriptedThrow }).__rsbThrow = scriptedThrow;
     let fps = 60;
@@ -1011,6 +1058,15 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
 
     scene.registerBeforeRender(() => {
       const dt = Math.min(0.05, engine.getDeltaTime() / 1000);
+      animT += dt;
+      world.backdrop.update(animT, dt);
+      capeNode.position.set(ball.position.x, ball.position.y + 0.25, ball.position.z);
+      if (cape) {
+        const rollingNow = throwPhase === "rolling" || throwPhase === "settling";
+        if (rollingNow && !capePhaseWasRolling) cape.reset();
+        capePhaseWasRolling = rollingNow;
+        cape.isVisible = rollingNow;
+      }
 
       // FPS watchdog: drop quality if the tablet can't keep up.
       fpsFrames++;

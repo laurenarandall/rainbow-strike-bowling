@@ -63,7 +63,7 @@ export interface BallSkin {
   finish?: BallFinish;
 }
 
-export type BallFinish = "studs" | "swirl" | "galaxy" | "fire" | "waves" | "stripes" | "pearl" | "metal" | "ice" | "spots" | "scales";
+export type BallFinish = "studs" | "swirl" | "galaxy" | "fire" | "waves" | "stripes" | "pearl" | "metal" | "ice" | "spots" | "scales" | "emblem";
 
 /** Weight + hook + finish for every ball (defaults if a skin leaves them out). */
 export function ballFeel(b: BallSkin): { pounds: number; hook: number; finish: BallFinish } {
@@ -86,5 +86,6 @@ export const BALLS: BallSkin[] = [
   { id: "candy", name: "Candy", ballColor: "#ffffff", studColor: "#ef4444", studColors: ["#ef4444", "#22c55e", "#ef4444", "#ffffff"], pounds: 11, hook: 0.9, finish: "stripes" },
   { id: "midnight", name: "Midnight", ballColor: "#0f172a", studColor: "#38bdf8", studColors: ["#38bdf8", "#a3e635", "#f472b6"], glow: 0.5, pounds: 14, hook: 1.3, finish: "galaxy" },
   { id: "dragon", name: "Heavy Dragon", ballColor: "#14532d", studColor: "#eab308", studColors: ["#eab308", "#166534"], pounds: 16, hook: 1.6, finish: "scales" },
+  { id: "superhero", name: "Super Hero", ballColor: "#1d4ed8", studColor: "#dc2626", studColors: ["#dc2626", "#fbbf24"], pounds: 14, hook: 1.2, finish: "emblem" },
   { id: "sunny", name: "Sunshine", ballColor: "#facc15", studColor: "#f97316", studColors: ["#f97316", "#ffffff"], pounds: 12, hook: 1.0, finish: "swirl" },
 ];

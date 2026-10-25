@@ -42,6 +42,6 @@ describe("gear", () => {
     expect(ballMassKg(16) / PIN_MASS_KG).toBeGreaterThan(4);
   });
   it("has 5 pin styles", () => {
-    expect(PIN_STYLES.map((p) => p.id)).toEqual(["classic", "rainbow", "lego", "gold", "neon"]);
+    expect(PIN_STYLES.map((p) => p.id)).toEqual(["classic", "rainbow", "lego", "gold", "neon", "mushroom"]);
   });
 });

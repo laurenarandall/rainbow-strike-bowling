@@ -218,6 +218,34 @@ export class SoundFX {
     for (const [f, t, d] of n) this.tone(f / 2, t, d, 0.06, "triangle");
   }
 
+  // Original two-note "coin" bling (square wave, quick upward jump).
+  coin() {
+    this.tone(987.77, 0, 0.08, 0.1, "square");
+    this.tone(1318.5, 0.08, 0.32, 0.1, "square");
+  }
+
+  // Original rising "power-up" sweep: a fast stepped climb that sparkles.
+  powerUp() {
+    const steps = [392, 494, 587, 698, 784, 932, 1047, 1245, 1397];
+    steps.forEach((f, i) => {
+      this.tone(f, i * 0.055, 0.09, 0.09, "square");
+      this.tone(f * 1.5, i * 0.055 + 0.02, 0.07, 0.04, "triangle");
+    });
+    this.tone(1568, steps.length * 0.055, 0.4, 0.08, "triangle");
+  }
+
+  // Original heroic fanfare: big leap up, held high note.
+  heroFanfare() {
+    const n: [number, number, number][] = [
+      [392, 0, 0.15], [587.33, 0.15, 0.15], [783.99, 0.3, 0.5], [698.46, 0.85, 0.12],
+      [783.99, 0.97, 0.12], [1046.5, 1.1, 0.8],
+    ];
+    for (const [f, t, d] of n) {
+      this.tone(f, t, d, 0.11, "sawtooth");
+      this.tone(f / 2, t, d, 0.06, "triangle");
+    }
+  }
+
   // Little "ta-daa" for a spare.
   spareJingle() {
     [[659.25, 0], [783.99, 0.1], [987.77, 0.2], [1318.5, 0.32]].forEach(([f, t]) =>
