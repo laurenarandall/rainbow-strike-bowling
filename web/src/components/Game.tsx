@@ -18,11 +18,33 @@ import type { LinesMesh } from "@babylonjs/core/Meshes/linesMesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTexture";
 import { SoundFX } from "../sound";
+import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import type { Character } from "../characters";
+import { CHARACTERS } from "../characters";
+
+export interface FrameStars {
+  pins: number;
+  stars: number;
+  strike: boolean;
+  spare: boolean;
+  done: boolean;
+}
+
+export function starsForFrame(throws: number[]): number {
+  const first = throws[0] ?? 0;
+  const total = Math.min(10, first + (throws[1] ?? 0));
+  if (first === 10 || total >= 10) return 3;
+  if (total >= 6) return 2;
+  if (total >= 1) return 1;
+  return 0;
+}
 
 interface GameProps {
   onScore: (score: number) => void;
   onGameOver: () => void;
-  onStats?: (stats: { frame: number }) => void;
+  onStats?: (stats: { frame: number; frames?: FrameStars[] }) => void;
+  character?: Character;
 }
 
 // --- Pin layout: standard triangle, 10 pins ---
@@ -157,7 +179,9 @@ function createWoodTexture(scene: Scene): DynamicTexture {
   return tex;
 }
 
-export function Game({ onScore, onGameOver, onStats }: GameProps) {
+export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
+  const characterRef = useRef<Character>(character ?? CHARACTERS[0]!);
+  characterRef.current = character ?? CHARACTERS[0]!;
   // Pulls from the SoundProvider that GameShell wraps around its children.
   // Gates the SoundFX class's playback so the topbar Mute button works.
   const { muted, toggle } = useSound();
@@ -199,8 +223,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     scene.clearColor = new Color4(0.45, 0.75, 1, 1);
 
     // ---- Camera: fixed behind ball, no user rotation, never moves ----
-    const camera = new FreeCamera("cam", new Vector3(0, 7, 13), scene);
+    const camera = new FreeCamera("cam", new Vector3(0, 6.5, 13.5), scene);
     camera.setTarget(new Vector3(0, 0, -10));
+    camera.fov = 0.78;
     // Do NOT attach controls -- the camera is locked for the whole game
 
     // ---- Lighting ----
@@ -225,6 +250,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const pinSpot = new PointLight("pinSpot", new Vector3(0, 5, PIN_Z_START), scene);
     pinSpot.intensity = 0.5;
     pinSpot.diffuse = new Color3(1, 0.95, 0.85);
+
+    const glow = new GlowLayer("glow", scene, { mainTextureSamples: 2 });
+    glow.intensity = 0.5;
+    const glowMeshes: Mesh[] = [];
 
     // ---- Surrounding floor (so the lane doesn't float in the void) ----
     const floor = MeshBuilder.CreateGround(
@@ -315,6 +344,87 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const wallMat = new StandardMaterial("wallMat", scene);
     wallMat.diffuseColor = new Color3(0.6, 0.4, 0.9);
     backWall.material = wallMat;
+    backWall.isVisible = false;
+
+    // ---- Rainbow Strike Castle ----
+    const CASTLE_Z = PIN_Z_START - 4.2;
+    const castleColors = RAINBOW.map((hex) => {
+      const m = new StandardMaterial(`castle${hex}`, scene);
+      m.diffuseColor = Color3.FromHexString(hex);
+      m.emissiveColor = Color3.FromHexString(hex).scale(0.2);
+      return m;
+    });
+    const stoneMat = new StandardMaterial("stoneMat", scene);
+    stoneMat.diffuseColor = new Color3(0.95, 0.9, 1);
+    // Wall segments either side of the gate, each brick course a rainbow color.
+    const WALL_H = 3.2;
+    const GATE_W = 3;
+    for (const side of [-1, 1]) {
+      for (let row = 0; row < 4; row++) {
+        const seg = MeshBuilder.CreateBox(`wall${side}${row}`, { width: 5.5, height: WALL_H / 4, depth: 0.6 }, scene);
+        seg.position.set(side * (GATE_W / 2 + 2.75), (row + 0.5) * (WALL_H / 4), CASTLE_Z);
+        seg.material = castleColors[(row + (side > 0 ? 3 : 0)) % castleColors.length]!;
+      }
+      // Crenellations
+      for (let k = 0; k < 4; k++) {
+        const cren = MeshBuilder.CreateBox(`cren${side}${k}`, { width: 0.7, height: 0.6, depth: 0.6 }, scene);
+        cren.position.set(side * (GATE_W / 2 + 0.6 + k * 1.4), WALL_H + 0.3, CASTLE_Z);
+        cren.material = castleColors[(k * 2 + (side > 0 ? 1 : 0)) % castleColors.length]!;
+      }
+      // Towers with cone roofs and banners
+      const tower = MeshBuilder.CreateCylinder(`tower${side}`, { height: 5.5, diameter: 2, tessellation: 20 }, scene);
+      tower.position.set(side * (GATE_W / 2 + 5.8), 2.75, CASTLE_Z);
+      tower.material = stoneMat;
+      for (let r = 0; r < 7; r++) {
+        const ring = MeshBuilder.CreateCylinder(`tring${side}${r}`, { height: 0.25, diameter: 2.08, tessellation: 20 }, scene);
+        ring.position.set(tower.position.x, 0.4 + r * 0.75, CASTLE_Z);
+        ring.material = castleColors[r]!;
+      }
+      const roof = MeshBuilder.CreateCylinder(`roof${side}`, { height: 2.2, diameterTop: 0, diameterBottom: 2.6, tessellation: 20 }, scene);
+      roof.position.set(tower.position.x, 6.6, CASTLE_Z);
+      roof.material = castleColors[side < 0 ? 0 : 5]!;
+      const pole = MeshBuilder.CreateCylinder(`pole${side}`, { height: 1.4, diameter: 0.08 }, scene);
+      pole.position.set(tower.position.x, 8.2, CASTLE_Z);
+      pole.material = stoneMat;
+      const flag = MeshBuilder.CreatePlane(`flag${side}`, { width: 1, height: 0.6, sideOrientation: 2 }, scene);
+      flag.position.set(tower.position.x + side * 0.5, 8.55, CASTLE_Z);
+      flag.material = castleColors[side < 0 ? 2 : 4]!;
+      // Hanging banners on the wall
+      for (let b = 0; b < 2; b++) {
+        const banner = MeshBuilder.CreatePlane(`banner${side}${b}`, { width: 0.8, height: 1.8 }, scene);
+        banner.position.set(side * (GATE_W / 2 + 1.5 + b * 2.2), 2, CASTLE_Z + 0.32);
+        banner.rotation.y = Math.PI;
+        banner.material = castleColors[(b * 3 + (side > 0 ? 1 : 4)) % castleColors.length]!;
+      }
+    }
+    // Gate arch top + dark gate opening
+    const lintel = MeshBuilder.CreateBox("lintel", { width: GATE_W + 0.2, height: 0.8, depth: 0.7 }, scene);
+    lintel.position.set(0, WALL_H - 0.1, CASTLE_Z);
+    lintel.material = castleColors[6]!;
+    const gateDark = MeshBuilder.CreatePlane("gateDark", { width: GATE_W, height: WALL_H - 0.5 }, scene);
+    gateDark.position.set(0, (WALL_H - 0.5) / 2, CASTLE_Z + 0.1);
+    gateDark.rotation.y = Math.PI;
+    const gateDarkMat = new StandardMaterial("gateDarkMat", scene);
+    gateDarkMat.diffuseColor = new Color3(1, 0.85, 0.2);
+    gateDarkMat.emissiveColor = new Color3(1, 0.75, 0.1);
+    gateDark.material = gateDarkMat;
+    // Drawbridge, hinged at its bottom edge; drops toward the lane on a strike.
+    const bridgePivot = new TransformNode("bridgePivot", scene);
+    bridgePivot.position.set(0, 0, CASTLE_Z + 0.4);
+    const bridge = MeshBuilder.CreateBox("bridge", { width: GATE_W, height: WALL_H - 0.5, depth: 0.2 }, scene);
+    bridge.parent = bridgePivot;
+    bridge.position.y = (WALL_H - 0.5) / 2;
+    const bridgeMat = new StandardMaterial("bridgeMat", scene);
+    bridgeMat.diffuseColor = new Color3(0.6, 0.38, 0.2);
+    bridge.material = bridgeMat;
+    for (let pl = 0; pl < 4; pl++) {
+      const plank = MeshBuilder.CreateBox(`plank${pl}`, { width: GATE_W + 0.02, height: 0.08, depth: 0.22 }, scene);
+      plank.parent = bridge;
+      plank.position.y = -0.9 + pl * 0.6;
+      plank.material = castleColors[pl * 2]!;
+    }
+    let bridgeTarget = 0; // 0 = up (closed), 1 = down (open)
+    let bridgeOpen = 0;
 
     // ---- Pin materials ----
     const pinMat = new StandardMaterial("pinMat", scene);
@@ -340,31 +450,41 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       const pins: PinState[] = [];
       for (let i = 0; i < 10; i++) {
         const pos = PIN_POSITIONS[i]!;
-        const pinBody = MeshBuilder.CreateCylinder(
+        // LEGO-style pin: three stacked bricks (narrowing) with studs on top.
+        const BH = PIN_HEIGHT / 3;
+        const pinBody = MeshBuilder.CreateBox(
           `pin${i}`,
-          {
-            height: PIN_HEIGHT,
-            diameterTop: PIN_RADIUS * 1.2,
-            diameterBottom: PIN_RADIUS * 2.2,
-            tessellation: 12,
-          },
+          { width: 0.3, height: BH, depth: 0.3 },
           scene,
         );
+        const lower = MeshBuilder.CreateBox(`pinLo${i}`, { width: 0.36, height: BH * 0.96, depth: 0.36 }, scene);
+        lower.parent = pinBody;
+        lower.position.y = -BH;
+        lower.material = pinMats[i]!;
+        const upper = MeshBuilder.CreateBox(`pinUp${i}`, { width: 0.24, height: BH * 0.96, depth: 0.24 }, scene);
+        upper.parent = pinBody;
+        upper.position.y = BH;
+        upper.material = pinMats[(i + 3) % pinMats.length]!;
+        for (let sx = -1; sx <= 1; sx += 2) {
+          for (let sz = -1; sz <= 1; sz += 2) {
+            const stud = MeshBuilder.CreateCylinder(`pinStud${i}${sx}${sz}`, { height: 0.06, diameter: 0.08, tessellation: 10 }, scene);
+            stud.parent = pinBody;
+            stud.position.set(sx * 0.06, BH * 1.5 + 0.03, sz * 0.06);
+            stud.material = pinMats[(i + 3) % pinMats.length]!;
+          }
+        }
         pinBody.position = pos.clone();
         pinBody.position.y = PIN_HEIGHT / 2;
         pinBody.material = pinMats[i]!;
         shadowGen.addShadowCaster(pinBody, true);
 
-        // Red stripe
-        const stripe = MeshBuilder.CreateCylinder(
-          `stripe${i}`,
-          { height: 0.12, diameter: PIN_RADIUS * 2.3, tessellation: 12 },
-          scene,
-        );
+        // White "smile" stripe on the middle brick
+        const stripe = MeshBuilder.CreateBox(`stripe${i}`, { width: 0.31, height: 0.05, depth: 0.31 }, scene);
         stripe.parent = pinBody;
-        stripe.position.y = 0.15;
+        stripe.position.y = 0;
         stripe.material = pinRedMat;
 
+        for (const c of pinBody.getChildMeshes()) shadowGen.addShadowCaster(c as Mesh);
         pins.push({
           mesh: pinBody,
           knocked: false,
@@ -405,14 +525,36 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       scene,
     );
     const ballMat = new StandardMaterial("ballMat", scene);
-    ballMat.diffuseColor = new Color3(0.95, 0.2, 0.6);
+    ballMat.diffuseColor = Color3.FromHexString(characterRef.current.ballColor);
+    ballMat.emissiveColor = Color3.FromHexString(characterRef.current.ballColor).scale(0.2);
+    const studMat = new StandardMaterial("ballStudMat", scene);
+    studMat.diffuseColor = Color3.FromHexString(characterRef.current.studColor);
+    studMat.emissiveColor = studMat.diffuseColor.scale(0.2);
+    {
+      // Fibonacci-sphere distribution of LEGO studs over the ball.
+      const N = 26;
+      const up = Vector3.Up();
+      for (let k = 0; k < N; k++) {
+        const y = 1 - (2 * (k + 0.5)) / N;
+        const r = Math.sqrt(1 - y * y);
+        const th = k * 2.399963;
+        const n = new Vector3(Math.cos(th) * r, y, Math.sin(th) * r);
+        const stud = MeshBuilder.CreateCylinder(`ballStud${k}`, { height: 0.1, diameter: 0.12, tessellation: 10 }, scene);
+        stud.parent = null;
+        stud.position = n.scale(BALL_RADIUS);
+        stud.rotationQuaternion = Quaternion.FromUnitVectorsToRef(up, n, new Quaternion());
+        stud.material = studMat;
+        // parent after placement so positions are in ball-local space
+        stud.parent = ball;
+      }
+    }
     ballMat.specularColor = new Color3(0.6, 0.6, 0.8);
     ballMat.specularPower = 64;
     ball.material = ballMat;
     shadowGen.addShadowCaster(ball);
 
     // Finger holes
-    for (let h = 0; h < 3; h++) {
+    for (let h = 0; h < 0; h++) {
       const hole = MeshBuilder.CreateCylinder(
         `hole${h}`,
         { height: 0.08, diameter: 0.09, tessellation: 8 },
@@ -433,14 +575,25 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     // ---- Aiming arrow (3D indicator on lane) ----
     const arrow = MeshBuilder.CreateBox(
       "arrow",
-      { width: 0.1, height: 0.02, depth: 2.5 },
+      { width: 0.02, height: 0.01, depth: 0.02 },
       scene,
     );
     const arrowMat = new StandardMaterial("arrowMat", scene);
-    arrowMat.diffuseColor = new Color3(1, 0.35, 0.35);
-    arrowMat.emissiveColor = new Color3(0.6, 0.15, 0.15);
-    arrowMat.alpha = 0.8;
+    arrowMat.diffuseColor = new Color3(1, 1, 1);
+    arrowMat.emissiveColor = new Color3(1, 1, 1);
     arrow.material = arrowMat;
+    // Thick rainbow shaft: seven glowing color bands side by side.
+    const SHAFT_W = 0.7;
+    RAINBOW.forEach((hex, k) => {
+      const band = MeshBuilder.CreateBox(`arrowBand${k}`, { width: SHAFT_W / RAINBOW.length + 0.005, height: 0.04, depth: 2.8 }, scene);
+      band.parent = arrow;
+      band.position.x = (k - (RAINBOW.length - 1) / 2) * (SHAFT_W / RAINBOW.length);
+      band.position.y = 0.02;
+      const m = new StandardMaterial(`arrowBandMat${k}`, scene);
+      m.diffuseColor = Color3.FromHexString(hex);
+      m.emissiveColor = Color3.FromHexString(hex).scale(0.55);
+      band.material = m;
+    });
 
     // Arrow head: a flat triangle on the lane with its apex pointing along -z
     // (toward the pins). Babylon's cylinder is Y-aligned, so we lay it on its
@@ -448,13 +601,21 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     // so the cone's apex (originally on +Y) ends up at -Z.
     const arrowHead = MeshBuilder.CreateCylinder(
       "arrowHead",
-      { height: 0.5, diameterTop: 0, diameterBottom: 0.3, tessellation: 3 },
+      { height: 0.9, diameterTop: 0, diameterBottom: 1.3, tessellation: 3 },
       scene,
     );
     arrowHead.parent = arrow;
-    arrowHead.position.z = -1.4;
+    arrowHead.position.z = -1.8;
+    arrowHead.position.y = 0.03;
     arrowHead.rotation.x = -Math.PI / 2;
-    arrowHead.material = arrowMat;
+    arrowHead.scaling.z = 0.08;
+    const headMat = new StandardMaterial("arrowHeadMat", scene);
+    headMat.diffuseColor = Color3.FromHexString("#ff4fb8");
+    headMat.emissiveColor = Color3.FromHexString("#ff4fb8").scale(0.9);
+    arrowHead.material = headMat;
+    glowMeshes.push(arrowHead);
+    glow.addIncludedOnlyMesh(arrowHead);
+    for (const gm of glowMeshes) glow.addIncludedOnlyMesh(gm);
 
     // ---- Trajectory preview: a dashed line showing the predicted ball path
     // given current aim+power+spin. Updated each frame during AIM and SPIN
@@ -482,7 +643,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     // Phase label
     const phaseLabel = document.createElement("div");
     phaseLabel.style.cssText =
-      "position:absolute;top:12px;left:50%;transform:translateX(-50%);" +
+      "position:absolute;top:84px;left:50%;transform:translateX(-50%);white-space:nowrap;" +
       "font-family:Fraunces,serif;font-size:30px;font-weight:800;" +
       "color:#fff;text-shadow:0 2px 8px rgba(0,0,0,0.7);text-align:center;" +
       "padding:6px 18px;border-radius:12px;background:rgba(0,0,0,0.35);" +
@@ -726,7 +887,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         phaseLabel.textContent = "🎯 Aim!";
         phaseLabel.style.opacity = "1";
         if (showInstr) {
-          instrLabel.textContent = "Slide left or right to aim, then tap!";
+          instrLabel.textContent = "Slide to aim, then tap! Or swipe up to throw!";
           instrLabel.style.opacity = "1";
         }
         powerWrap.style.display = "none";
@@ -777,7 +938,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       ballVx = 0;
       ball.position.set(0, BALL_RADIUS, ballStartZ);
       ball.rotation.set(0, 0, 0);
-      ball.isVisible = true;
+      ball.setEnabled(true);
     }
 
     function resetAllPins() {
@@ -820,6 +981,17 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       startAiming();
     }
 
+    function emitStats() {
+      const fs: FrameStars[] = frames.map((f, idx) => ({
+        pins: Math.min(10, (f.throws[0] ?? 0) + (f.throws[1] ?? 0)),
+        stars: starsForFrame(f.throws),
+        strike: f.throws[0] === 10,
+        spare: f.throws[0] !== 10 && (f.throws[0] ?? 0) + (f.throws[1] ?? 0) >= 10,
+        done: idx < currentFrame || f.throws.length >= 2 || f.throws[0] === 10,
+      }));
+      onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10), frames: fs });
+    }
+
     function updateScore() {
       const total = computeTotalScore(frames);
       onScoreRef.current(total);
@@ -832,7 +1004,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       powerDir = 1;
       spin = 0;
       resetBallPosition();
-      arrow.isVisible = true;
+      arrow.setEnabled(true);
       onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10) });
       updateTrajectory();
       updateHUD();
@@ -842,7 +1014,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       throwPhase = "power";
       power = 0;
       powerDir = 1;
-      arrow.isVisible = false;
+      arrow.setEnabled(false);
       updateHUD();
     }
 
@@ -855,6 +1027,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     let sweetThrow = false;
     function throwBall() {
+      bridgeTarget = 0;
       sweetThrow = EASY_MODE && power >= SWEET_MIN && power <= SWEET_MAX;
       if (sweetThrow) {
         phaseLabel.textContent = "⭐ Perfect power!";
@@ -890,14 +1063,18 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       frame.throws.push(newlyKnocked);
       frame.pinsDown.push(newlyKnocked);
       updateScore();
+      emitStats();
 
       const isStrike = currentThrow === 0 && newlyKnocked === 10;
       const totalDown = frame.throws.reduce((a, b) => a + b, 0);
       const isSpare = currentThrow === 1 && totalDown >= 10;
 
-      const cheer = CHEERS[Math.floor(Math.random() * CHEERS.length)]!;
+      const pool = [...CHEERS, ...characterRef.current.cheers, ...characterRef.current.cheers];
+      const cheer = pool[Math.floor(Math.random() * pool.length)]!;
+      bridgeTarget = 0;
       if (isStrike) {
-        showBigLabel("🌈 STRIKE! 🌈", "All 10 pins! Amazing!", 2200);
+        showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 2400);
+        bridgeTarget = 1;
         sfx.strike();
         confetti(200);
       } else if (isSpare) {
@@ -955,6 +1132,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     let pointerDown = false;
     let pointerStartX = 0;
+    let pointerStartY = 0;
+    let pointerStartT = 0;
     let aimXAtPointerStart = 0;
 
     let spinAtPointerStart = 0;
@@ -963,6 +1142,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       if (e.key === " " || e.key === "Enter") {
         e.preventDefault();
         if (throwPhase === "aiming") {
+          bridgeTarget = 0;
           startPower();
         } else if (throwPhase === "power") {
           if (EASY_MODE) throwBall();
@@ -987,6 +1167,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       if (throwPhase === "aiming") {
         pointerDown = true;
         pointerStartX = e.clientX;
+        pointerStartY = e.clientY;
+        pointerStartT = performance.now();
         aimXAtPointerStart = aimX;
       } else if (throwPhase === "power") {
         if (EASY_MODE) throwBall();
@@ -1000,7 +1182,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     const handlePointerMove = (e: PointerEvent) => {
       if (!pointerDown) return;
-      if (throwPhase === "aiming") {
+      if (throwPhase === "aiming" && pointerStartY - e.clientY > 40 && pointerStartY - e.clientY > Math.abs(e.clientX - pointerStartX)) {
+        // Looks like an upward swipe: keep aim where it started.
+        aimX = aimXAtPointerStart;
+      } else if (throwPhase === "aiming") {
         // Negative dx maps dragging right (positive pointer delta) to the
         // ball moving camera-right (-X in Babylon's left-handed coords with
         // the camera looking down -Z). This matches the spin slider's
@@ -1016,8 +1201,23 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       }
     };
 
-    const handlePointerUp = () => {
+    const handlePointerUp = (e: PointerEvent) => {
       if (!pointerDown) return;
+      // Swipe up to throw: speed sets power, sideways drift adds angle.
+      const sdy = pointerStartY - e.clientY;
+      const sdx = e.clientX - pointerStartX;
+      if (throwPhase === "aiming" && sdy > 50 && sdy > Math.abs(sdx)) {
+        pointerDown = false;
+        const ms = Math.max(60, performance.now() - pointerStartT);
+        const speed = sdy / ms; // px per ms
+        aimX = aimXAtPointerStart;
+        power = Math.max(0.35, Math.min(1, 0.3 + speed * 0.35));
+        // Generous: most swipes land in the green.
+        if (power > SWEET_MAX && power < 0.95) power = SWEET_MAX;
+        throwBall();
+        ballVx = Math.max(-1.6, Math.min(1.6, -(sdx / sdy) * 2.5));
+        return;
+      }
       const wasSpin = throwPhase === "spin";
       const wasAiming = throwPhase === "aiming";
       pointerDown = false;
@@ -1030,6 +1230,13 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     canvas.addEventListener("pointerdown", handlePointerDown);
     canvas.addEventListener("pointermove", handlePointerMove);
     canvas.addEventListener("pointerup", handlePointerUp);
+
+    // Test hook (used by the screenshot script): trigger the strike celebration.
+    (window as unknown as { __rsbCelebrate?: () => void }).__rsbCelebrate = () => {
+      bridgeTarget = 1;
+      confetti(200);
+      showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 4000);
+    };
 
     // ---- Main loop ----
     startAiming();
@@ -1055,8 +1262,9 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         ball.position.y = BALL_RADIUS;
 
         // Arrow
-        arrow.position.set(aimX, 0.05, ballStartZ - 1.8);
-        arrow.isVisible = true;
+        arrow.position.set(aimX, 0.05, ballStartZ - 2.2);
+        glow.intensity = 0.45 + 0.25 * Math.sin(performance.now() / 180);
+        arrow.setEnabled(true);
         updateTrajectory();
       }
 
@@ -1181,7 +1389,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         if (ballZ < PIN_Z_START - 5) {
           throwPhase = "settling";
           settleTimer = 0;
-          ball.isVisible = false;
+          ball.setEnabled(false);
           sfx.stopRoll();
           updateHUD();
         }
@@ -1193,6 +1401,13 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           throwPhase = "done";
           handleThrowComplete();
         }
+      }
+
+      // Drawbridge animation
+      if (bridgeOpen !== bridgeTarget) {
+        const step = dt * (bridgeTarget > bridgeOpen ? 1.6 : 0.9);
+        bridgeOpen = bridgeTarget > bridgeOpen ? Math.min(bridgeTarget, bridgeOpen + step) : Math.max(bridgeTarget, bridgeOpen - step);
+        bridgePivot.rotation.x = -bridgeOpen * (Math.PI / 2) * 0.95;
       }
 
       // Animate falling pins — hot path, no allocations.
