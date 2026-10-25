@@ -185,8 +185,12 @@ export class SoundFX {
     });
   }
 
-  // Two-note flourish for SPARE — quieter, shorter than strike.
   spare() {
+    this.spareJingle();
+  }
+
+  // Two-note flourish (original spare sound).
+  spareOld() {
     const ctx = this.ensureCtx();
     if (!ctx) return;
     [659.25, 880.0].forEach((freq, i) => {
@@ -204,8 +208,82 @@ export class SoundFX {
     });
   }
 
+  // Bouncy "let's go!" jingle when a game starts.
+  startJingle() {
+    const n: [number, number, number][] = [
+      [392, 0, 0.12], [523.25, 0.12, 0.12], [659.25, 0.24, 0.12], [783.99, 0.36, 0.2],
+      [659.25, 0.58, 0.1], [783.99, 0.7, 0.4],
+    ];
+    for (const [f, t, d] of n) this.tone(f, t, d, 0.12, "square");
+    for (const [f, t, d] of n) this.tone(f / 2, t, d, 0.06, "triangle");
+  }
+
+  // Little "ta-daa" for a spare.
+  spareJingle() {
+    [[659.25, 0], [783.99, 0.1], [987.77, 0.2], [1318.5, 0.32]].forEach(([f, t]) =>
+      this.tone(f!, t!, 0.35, 0.12, "triangle"),
+    );
+  }
+
+  // Sad trombone (wah wah wah waaah) for a gutter ball.
+  sadTrombone() {
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    const notes: [number, number, number][] = [[392, 0, 0.35], [370, 0.38, 0.35], [349.23, 0.76, 0.35], [329.63, 1.14, 0.9]];
+    for (const [f, start, d] of notes) {
+      const osc = ctx.createOscillator();
+      osc.type = "sawtooth";
+      const t = ctx.currentTime + start;
+      osc.frequency.setValueAtTime(f, t);
+      if (d > 0.5) {
+        // wobble on the last note
+        const lfo = ctx.createOscillator();
+        const lg = ctx.createGain();
+        lfo.frequency.value = 6;
+        lg.gain.value = 8;
+        lfo.connect(lg).connect(osc.frequency);
+        lfo.start(t);
+        lfo.stop(t + d);
+      }
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 900;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.1, t + 0.03);
+      gain.gain.setValueAtTime(0.1, t + d - 0.08);
+      gain.gain.linearRampToValueAtTime(0.001, t + d);
+      osc.connect(filter).connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + d + 0.05);
+    }
+  }
+
+  // Victory tune for the end of a game.
+  gameOver() {
+    const mel: [number, number, number][] = [
+      [523.25, 0, 0.15], [659.25, 0.15, 0.15], [783.99, 0.3, 0.15], [1046.5, 0.45, 0.3],
+      [783.99, 0.8, 0.15], [1046.5, 0.95, 0.6],
+    ];
+    for (const [f, t, d] of mel) {
+      this.tone(f, t, d, 0.12, "square");
+      this.tone(f / 2, t, d, 0.07, "triangle");
+    }
+    [261.63, 329.63, 392].forEach((f) => this.tone(f, 0.95, 1.0, 0.05, "sine"));
+  }
+
+  // Sparkly chime for earning an award or badge.
+  award() {
+    [1046.5, 1318.5, 1568, 2093, 1568, 2093].forEach((f, i) => this.tone(f, i * 0.08, 0.4, 0.08, "sine"));
+    this.tone(523.25, 0, 0.8, 0.06, "triangle");
+  }
+
   // Descending sawtooth wail. Played when the ball drops into the gutter.
   gutter() {
+    this.sadTrombone();
+  }
+
+  gutterWail() {
     const ctx = this.ensureCtx();
     if (!ctx) return;
     const osc = ctx.createOscillator();

@@ -1,0 +1,145 @@
+// DOM celebration effects: name phrases, dancing animals, fireworks.
+export const PLAYER_NAME = "Narek";
+
+const FONTS = [
+  "'Luckiest Guy', cursive",
+  "'Chewy', cursive",
+  "'Bungee', cursive",
+  "'Pacifico', cursive",
+  "'Fredoka', sans-serif",
+  "'Bubblegum Sans', cursive",
+  "'Baloo 2', cursive",
+];
+const COLORS = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff", "#ff4fb8"];
+
+export const NAME_PHRASES = [
+  `Go, ${PLAYER_NAME}!`,
+  `You're doing amazing, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME} the Bowling Champ!`,
+  `Super roll, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME} is a superstar! ⭐`,
+  `Keep going, ${PLAYER_NAME}!`,
+  `High five, ${PLAYER_NAME}! ✋`,
+  `${PLAYER_NAME} rocks! 🎸`,
+  `Way to go, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME}, you've got this!`,
+];
+
+const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)]!;
+
+let styleAdded = false;
+function ensureStyle() {
+  if (styleAdded || typeof document === "undefined") return;
+  styleAdded = true;
+  const st = document.createElement("style");
+  st.textContent = `
+@keyframes rsbFloatAcross{0%{transform:translateX(0) translateY(0) rotate(-4deg) scale(.6);opacity:0}
+10%{opacity:1;transform:translateX(calc(var(--dist)*.1)) translateY(-10px) rotate(3deg) scale(1)}
+50%{transform:translateX(calc(var(--dist)*.5)) translateY(12px) rotate(-3deg) scale(1.08)}
+90%{opacity:1}100%{transform:translateX(var(--dist)) translateY(-8px) rotate(4deg) scale(1);opacity:0}}
+@keyframes rsbDisco{0%,100%{transform:translateY(0) rotate(-12deg) scaleX(1)}25%{transform:translateY(-28px) rotate(10deg) scaleX(-1)}
+50%{transform:translateY(0) rotate(-8deg) scaleX(-1)}75%{transform:translateY(-22px) rotate(14deg) scaleX(1)}}
+@keyframes rsbFadeInOut{0%{opacity:0}12%{opacity:1}85%{opacity:1}100%{opacity:0}}
+@keyframes rsbSpin{to{transform:rotate(360deg)}}
+@keyframes rsbSpark{0%{transform:translate(0,0) scale(1);opacity:1}100%{transform:translate(var(--dx),var(--dy)) scale(.3);opacity:0}}
+@keyframes rsbBadge{0%{transform:translate(-50%,-40px) scale(.3);opacity:0}15%{transform:translate(-50%,0) scale(1.15);opacity:1}
+25%{transform:translate(-50%,0) scale(1)}85%{opacity:1}100%{transform:translate(-50%,-20px) scale(.9);opacity:0}}
+`;
+  document.head.appendChild(st);
+}
+
+/** A cute phrase with the player's name floats across the sky. */
+export function floatPhrase(container: HTMLElement, text = pick(NAME_PHRASES)) {
+  ensureStyle();
+  const el = document.createElement("div");
+  const ltr = Math.random() < 0.5;
+  const w = container.clientWidth || 800;
+  el.textContent = text;
+  el.style.cssText =
+    `position:absolute;top:${16 + Math.random() * 20}%;${ltr ? "left:-10%" : "right:-10%"};` +
+    `font-family:${pick(FONTS)};font-size:clamp(22px,4.5vw,44px);color:${pick(COLORS)};` +
+    "white-space:nowrap;pointer-events:none;z-index:12;-webkit-text-stroke:1.5px #fff;" +
+    "text-shadow:0 3px 0 rgba(0,0,0,.18),0 0 14px rgba(255,255,255,.9);" +
+    `--dist:${(ltr ? 1 : -1) * w * 1.2}px;animation:rsbFloatAcross ${6 + Math.random() * 2}s ease-in-out forwards;`;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 8500);
+}
+
+/** Unicorns, squirrels and turtles have a little disco party. */
+export function animalDisco(container: HTMLElement, ms = 3500) {
+  ensureStyle();
+  const party = document.createElement("div");
+  party.style.cssText =
+    "position:absolute;inset:0;pointer-events:none;z-index:11;" +
+    `animation:rsbFadeInOut ${ms}ms ease forwards;`;
+  const ball = document.createElement("div");
+  ball.textContent = "🪩";
+  ball.style.cssText =
+    "position:absolute;top:13%;left:50%;margin-left:-28px;font-size:56px;animation:rsbSpin 1.2s linear infinite;";
+  party.appendChild(ball);
+  // Disco light beams
+  for (let i = 0; i < 6; i++) {
+    const beam = document.createElement("div");
+    beam.style.cssText =
+      `position:absolute;top:18%;left:50%;width:14px;height:70%;transform-origin:top center;` +
+      `background:linear-gradient(${COLORS[i]},transparent);opacity:.35;` +
+      `transform:rotate(${-60 + i * 24}deg);filter:blur(2px);`;
+    party.appendChild(beam);
+  }
+  const animals = ["🦄", "🐿️", "🐢", "🦄", "🐿️", "🐢"];
+  animals.forEach((a, i) => {
+    const el = document.createElement("div");
+    const left = i < 3 ? 3 + i * 9 : 70 + (i - 3) * 9;
+    el.textContent = a;
+    el.style.cssText =
+      `position:absolute;top:${30 + (i % 3) * 7}%;left:${left}%;font-size:clamp(36px,6vw,64px);` +
+      `animation:rsbDisco ${0.55 + (i % 3) * 0.08}s ease-in-out ${i * 0.07}s infinite;` +
+      "filter:drop-shadow(0 4px 4px rgba(0,0,0,.25));";
+    party.appendChild(el);
+  });
+  container.appendChild(party);
+  setTimeout(() => party.remove(), ms + 100);
+}
+
+/** Fireworks bursting all over the screen. */
+export function fireworks(container: HTMLElement, bursts = 8, spreadMs = 2200) {
+  ensureStyle();
+  for (let b = 0; b < bursts; b++) {
+    setTimeout(() => {
+      const x = 8 + Math.random() * 84;
+      const y = 8 + Math.random() * 55;
+      const color = pick(COLORS);
+      const color2 = pick(COLORS);
+      const n = 28;
+      for (let i = 0; i < n; i++) {
+        const s = document.createElement("div");
+        const ang = (i / n) * Math.PI * 2;
+        const dist = 60 + Math.random() * 90;
+        s.style.cssText =
+          `position:absolute;left:${x}%;top:${y}%;width:7px;height:7px;border-radius:50%;` +
+          `background:${i % 2 ? color : color2};box-shadow:0 0 8px ${color};pointer-events:none;z-index:13;` +
+          `--dx:${Math.cos(ang) * dist}px;--dy:${Math.sin(ang) * dist + 30}px;` +
+          `animation:rsbSpark ${0.9 + Math.random() * 0.5}s cubic-bezier(.1,.8,.3,1) forwards;`;
+        container.appendChild(s);
+        setTimeout(() => s.remove(), 1600);
+      }
+    }, (b / bursts) * spreadMs + Math.random() * 200);
+  }
+}
+
+/** A badge pops in at the top of the screen. */
+export function badgeToast(container: HTMLElement, icon: string, title: string, delay = 0) {
+  ensureStyle();
+  setTimeout(() => {
+    const el = document.createElement("div");
+    el.innerHTML = `<span style="font-size:40px">${icon}</span><div><div style="font-size:13px;opacity:.8">NEW AWARD!</div><div>${title}</div></div>`;
+    el.style.cssText =
+      "position:absolute;top:96px;left:50%;display:flex;gap:10px;align-items:center;" +
+      "padding:10px 20px;border-radius:20px;background:linear-gradient(135deg,#fde68a,#f9a8d4);" +
+      "border:4px solid #fff;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:40;pointer-events:none;" +
+      "font-family:'Luckiest Guy','Fredoka',sans-serif;font-size:22px;color:#6d28d9;white-space:nowrap;" +
+      "animation:rsbBadge 3.6s ease forwards;";
+    container.appendChild(el);
+    setTimeout(() => el.remove(), 3800);
+  }, delay);
+}

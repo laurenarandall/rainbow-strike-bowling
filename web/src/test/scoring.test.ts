@@ -30,3 +30,18 @@ describe("star scoring", () => {
     expect(starsForFrame([0, 0])).toBe(0);
   });
 });
+
+import { earnedAwards } from "../profile";
+
+describe("awards", () => {
+  const base = { score: 0, stars: 0, throwsSeq: [], strikesInRow: 0, maxStrikesInRow: 0, strikes: 0, spares: 0, gutters: 0, finished: false };
+  it("awards first strike and turkey", () => {
+    const a = earnedAwards({ ...base, strikes: 3, maxStrikesInRow: 3 }, 0);
+    expect(a).toContain("first-strike");
+    expect(a).toContain("turkey");
+  });
+  it("awards 100 club only at 100+", () => {
+    expect(earnedAwards({ ...base, score: 99 }, 0)).not.toContain("score-100");
+    expect(earnedAwards({ ...base, score: 100, finished: true }, 1)).toContain("score-100");
+  });
+});

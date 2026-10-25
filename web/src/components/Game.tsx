@@ -22,6 +22,7 @@ import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Character } from "../characters";
 import { CHARACTERS } from "../characters";
+import { PLAYER_NAME, NAME_PHRASES, floatPhrase, animalDisco, fireworks } from "../fx";
 
 export interface FrameStars {
   pins: number;
@@ -45,6 +46,8 @@ interface GameProps {
   onGameOver: () => void;
   onStats?: (stats: { frame: number; frames?: FrameStars[] }) => void;
   character?: Character;
+  bumpers?: boolean;
+  onThrow?: (t: { pins: number; strike: boolean; spare: boolean; gutter: boolean; frame: number }) => void;
 }
 
 // --- Pin layout: standard triangle, 10 pins ---
@@ -73,20 +76,23 @@ const PIN_POSITIONS = getPinPositions();
 const LANE_WIDTH = 5;
 const LANE_LENGTH = 25;
 const BALL_RADIUS = 0.35;
-const PIN_RADIUS = 0.15;
-const PIN_HEIGHT = 0.9;
+const PIN_RADIUS = 0.18;
+const PIN_HEIGHT = 1.05;
 const BALL_SPEED = 25;
-const KNOCK_DISTANCE = 0.6;
+const KNOCK_DISTANCE = BALL_RADIUS + 0.22;
 // Easy mode: bigger hit zone when the power lands in the green sweet spot.
-const SWEET_KNOCK_DISTANCE = 0.75;
-const SWEET_MIN = 0.45;
-const SWEET_MAX = 0.8;
+const SWEET_MIN = 0.6;
+const SWEET_MAX = 0.72;
 const EASY_MODE = true;
-const BUMPERS = true;
+// Ball feel: a gentle, consistent hook that kicks in down-lane, plus random drift
+// that gets bigger the further the power is from the sweet spot.
+const HOOK_ACCEL = 0.5;
+const HOOK_START_Z = -4;
+const PIN_HIT_RADIUS = 0.55; // knocked pin vs standing pin contact distance
+const PIN_FRICTION = 2.2;
 const RAINBOW = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff"];
 const PIN_COLORS = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff", "#ff4fb8", "#00d1c1", "#ffffff"];
 const CHEERS = ["Great job!", "Awesome!", "Way to go!", "Super!", "Nice roll!", "You rock!", "Wow!"];
-const PIN_CHAIN_DISTANCE = PIN_SPACING * 1.2;
 const TOTAL_FRAMES = 10;
 
 interface PinState {
@@ -102,6 +108,10 @@ interface PinState {
   quat: Quaternion;
   originalPos: Vector3;
   knockDelay: number;
+  vx: number;
+  vz: number;
+  offX: number;
+  offZ: number;
 }
 
 interface FrameScore {
@@ -179,7 +189,11 @@ function createWoodTexture(scene: Scene): DynamicTexture {
   return tex;
 }
 
-export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
+export function Game({ onScore, onGameOver, onStats, character, bumpers = false, onThrow }: GameProps) {
+  const bumpersRef = useRef(bumpers);
+  bumpersRef.current = bumpers;
+  const onThrowRef = useRef(onThrow);
+  onThrowRef.current = onThrow;
   const characterRef = useRef<Character>(character ?? CHARACTERS[0]!);
   characterRef.current = character ?? CHARACTERS[0]!;
   // Pulls from the SoundProvider that GameShell wraps around its children.
@@ -205,8 +219,13 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
   onStatsRef.current = onStats;
 
   // Forward platform mute state into SoundFX whenever it changes.
+  const startPlayed = useRef(false);
   useEffect(() => {
     sfxRef.current?.setMuted(muted);
+    if (!muted && !startPlayed.current && sfxRef.current) {
+      startPlayed.current = true;
+      sfxRef.current.startJingle();
+    }
   }, [muted]);
 
   useEffect(() => {
@@ -317,7 +336,8 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
     }
 
     // ---- Bumpers: soft rainbow rails over the gutters ----
-    if (BUMPERS) {
+    const bumperMeshes: Mesh[] = [];
+    {
       for (const side of [-1, 1]) {
         const bumper = MeshBuilder.CreateCylinder(
           `bumper${side}`,
@@ -330,6 +350,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
         bMat.diffuseColor = side < 0 ? new Color3(1, 0.3, 0.7) : new Color3(0.2, 0.7, 1);
         bMat.emissiveColor = bMat.diffuseColor.scale(0.4);
         bumper.material = bMat;
+        bumperMeshes.push(bumper);
       }
     }
 
@@ -454,22 +475,22 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
         const BH = PIN_HEIGHT / 3;
         const pinBody = MeshBuilder.CreateBox(
           `pin${i}`,
-          { width: 0.3, height: BH, depth: 0.3 },
+          { width: 0.36, height: BH, depth: 0.36 },
           scene,
         );
-        const lower = MeshBuilder.CreateBox(`pinLo${i}`, { width: 0.36, height: BH * 0.96, depth: 0.36 }, scene);
+        const lower = MeshBuilder.CreateBox(`pinLo${i}`, { width: 0.43, height: BH * 0.96, depth: 0.43 }, scene);
         lower.parent = pinBody;
         lower.position.y = -BH;
         lower.material = pinMats[i]!;
-        const upper = MeshBuilder.CreateBox(`pinUp${i}`, { width: 0.24, height: BH * 0.96, depth: 0.24 }, scene);
+        const upper = MeshBuilder.CreateBox(`pinUp${i}`, { width: 0.29, height: BH * 0.96, depth: 0.29 }, scene);
         upper.parent = pinBody;
         upper.position.y = BH;
         upper.material = pinMats[(i + 3) % pinMats.length]!;
         for (let sx = -1; sx <= 1; sx += 2) {
           for (let sz = -1; sz <= 1; sz += 2) {
-            const stud = MeshBuilder.CreateCylinder(`pinStud${i}${sx}${sz}`, { height: 0.06, diameter: 0.08, tessellation: 10 }, scene);
+            const stud = MeshBuilder.CreateCylinder(`pinStud${i}${sx}${sz}`, { height: 0.07, diameter: 0.1, tessellation: 10 }, scene);
             stud.parent = pinBody;
-            stud.position.set(sx * 0.06, BH * 1.5 + 0.03, sz * 0.06);
+            stud.position.set(sx * 0.072, BH * 1.5 + 0.035, sz * 0.072);
             stud.material = pinMats[(i + 3) % pinMats.length]!;
           }
         }
@@ -479,7 +500,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
         shadowGen.addShadowCaster(pinBody, true);
 
         // White "smile" stripe on the middle brick
-        const stripe = MeshBuilder.CreateBox(`stripe${i}`, { width: 0.31, height: 0.05, depth: 0.31 }, scene);
+        const stripe = MeshBuilder.CreateBox(`stripe${i}`, { width: 0.37, height: 0.06, depth: 0.37 }, scene);
         stripe.parent = pinBody;
         stripe.position.y = 0;
         stripe.material = pinRedMat;
@@ -495,6 +516,10 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
           quat: new Quaternion(),
           originalPos: pos.clone(),
           knockDelay: 0,
+          vx: 0,
+          vz: 0,
+          offX: 0,
+          offZ: 0,
         });
       }
       return pins;
@@ -857,7 +882,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
           x += vx * dtSim;
         }
         z -= speed * dtSim;
-        if (z < PIN_Z_START - 2) {
+        if (z < HOOK_START_Z) {
           // pad remaining points at the last position so the line mesh
           // stays at a fixed length for in-place updates.
           while (pts.length < TRAJ_POINTS) {
@@ -999,6 +1024,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
 
     function startAiming() {
       throwPhase = "aiming";
+      for (const b of bumperMeshes) b.setEnabled(bumpersRef.current);
       aimX = 0;
       power = 0;
       powerDir = 1;
@@ -1026,6 +1052,8 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
     }
 
     let sweetThrow = false;
+    let ballSpeed = BALL_SPEED;
+    let driftAcc = 0;
     function throwBall() {
       bridgeTarget = 0;
       sweetThrow = EASY_MODE && power >= SWEET_MIN && power <= SWEET_MAX;
@@ -1041,6 +1069,9 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
       // like a real hook ball. No more fixed aim-X reverse-drift.
       ballVx = 0;
       guttered = false;
+      ballSpeed = BALL_SPEED * (0.45 + power * 0.55);
+      const miss = sweetThrow ? 0 : Math.min(1, Math.abs(power - (SWEET_MIN + SWEET_MAX) / 2) * 3);
+      driftAcc = (Math.random() * 2 - 1) * (0.12 + miss * 1.4);
       ball.position.x = ballX;
       ball.position.z = ballZ;
       ball.position.y = BALL_RADIUS;
@@ -1069,24 +1100,31 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
       const totalDown = frame.throws.reduce((a, b) => a + b, 0);
       const isSpare = currentThrow === 1 && totalDown >= 10;
 
-      const pool = [...CHEERS, ...characterRef.current.cheers, ...characterRef.current.cheers];
+      const pool = [...CHEERS, ...characterRef.current.cheers, ...characterRef.current.cheers, ...NAME_PHRASES];
       const cheer = pool[Math.floor(Math.random() * pool.length)]!;
+      onThrowRef.current?.({ pins: newlyKnocked, strike: currentThrow === 0 && newlyKnocked === 10, spare: currentThrow === 1 && frame.throws.reduce((a, b) => a + b, 0) >= 10 && frame.throws[0] !== 10, gutter: guttered, frame: currentFrame + 1 });
+      if (Math.random() < 0.6) floatPhrase(hudDiv);
       bridgeTarget = 0;
       if (isStrike) {
         showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 2400);
         bridgeTarget = 1;
         sfx.strike();
-        confetti(200);
+        confetti(260);
+        fireworks(hudDiv, 12, 2600);
+        animalDisco(hudDiv, 4200);
       } else if (isSpare) {
         showBigLabel("✨ SPARE! ✨", `You got them all! ${cheer}`, 2000);
         sfx.spare();
-        confetti(90);
+        confetti(140);
+        fireworks(hudDiv, 6, 1800);
+        animalDisco(hudDiv, 3200);
       } else if (newlyKnocked === 0) {
-        showBigLabel("So close!", "Try again! You can do it!");
-        sfx.encourage();
+        showBigLabel(guttered ? "Oops, gutter!" : "So close!", `Try again, ${PLAYER_NAME}! You can do it!`);
+        if (!guttered) sfx.encourage();
       } else {
         showBigLabel(`${newlyKnocked} pin${newlyKnocked === 1 ? "" : "s"}!`, cheer);
         sfx.cheer();
+        if (newlyKnocked >= 7) animalDisco(hudDiv, 2600);
       }
 
       if (currentFrame < 9) {
@@ -1094,7 +1132,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
           currentFrame++;
           currentThrow = 0;
           if (currentFrame >= TOTAL_FRAMES) {
-            onGameOverRef.current();
+            { sfx.gameOver(); onGameOverRef.current(); }
             return;
           }
           nextThrow(true);
@@ -1116,11 +1154,11 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
             currentThrow = 2;
             nextThrow(true);
           } else {
-            onGameOverRef.current();
+            { sfx.gameOver(); onGameOverRef.current(); }
             return;
           }
         } else {
-          onGameOverRef.current();
+          { sfx.gameOver(); onGameOverRef.current(); }
           return;
         }
       }
@@ -1213,9 +1251,8 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
         aimX = aimXAtPointerStart;
         power = Math.max(0.35, Math.min(1, 0.3 + speed * 0.35));
         // Generous: most swipes land in the green.
-        if (power > SWEET_MAX && power < 0.95) power = SWEET_MAX;
         throwBall();
-        ballVx = Math.max(-1.6, Math.min(1.6, -(sdx / sdy) * 2.5));
+        ballVx = Math.max(-1.2, Math.min(1.2, -(sdx / sdy) * 2.2));
         return;
       }
       const wasSpin = throwPhase === "spin";
@@ -1235,6 +1272,9 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
     (window as unknown as { __rsbCelebrate?: () => void }).__rsbCelebrate = () => {
       bridgeTarget = 1;
       confetti(200);
+      fireworks(hudDiv, 12, 2600);
+      animalDisco(hudDiv, 4200);
+      floatPhrase(hudDiv);
       showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 4000);
     };
 
@@ -1285,7 +1325,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
       }
 
       if (throwPhase === "power") {
-        power += powerDir * (EASY_MODE ? 0.55 : 1.2) * dt;
+        power += powerDir * (EASY_MODE ? 0.8 : 1.2) * dt;
         if (power >= 1) {
           power = 1;
           powerDir = -1;
@@ -1306,24 +1346,25 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
       }
 
       if (throwPhase === "rolling") {
-        const speed = BALL_SPEED * (0.4 + power * 0.6);
+        const speed = ballSpeed;
         ballZ -= speed * dt;
-        // Spin accumulates lateral velocity over time. The ball starts
-        // straight (ballVx = 0 at throwBall) and curves more the longer it
-        // rolls — like a real hook ball. Sign matches simulateTrajectory.
-        if (!guttered && !EASY_MODE) ballVx -= spin * CURVE_RATE * dt;
+        if (!guttered) {
+          if (!EASY_MODE) ballVx -= spin * CURVE_RATE * dt;
+          // Down-lane hook toward the player's left (+X) and a little random drift.
+          if (ballZ < HOOK_START_Z) ballVx += HOOK_ACCEL * dt;
+          ballVx += driftAcc * dt;
+        }
         ballX += ballVx * dt;
 
-        // Gutter: once the ball reaches the lane edge it falls into the
-        // gutter, glides forward there, and skips the pin collision check.
-        if (BUMPERS && Math.abs(ballX) > GUTTER_EDGE) {
-          // Bounce off the bumper back toward the middle of the lane.
+        if (bumpersRef.current && Math.abs(ballX) > GUTTER_EDGE) {
+          // Bumpers only stop gutters: bounce back gently toward the middle.
           const side = Math.sign(ballX);
           ballX = side * GUTTER_EDGE;
-          ballVx = -side * Math.max(Math.abs(ballVx) * 0.6, 1.2);
+          ballVx = -side * Math.max(Math.abs(ballVx) * 0.5, 0.6);
+          ballSpeed *= 0.92;
           sfx.bumper();
         }
-        if (!BUMPERS && !guttered && Math.abs(ballX) > GUTTER_EDGE) {
+        if (!bumpersRef.current && !guttered && Math.abs(ballX) > GUTTER_EDGE + 0.1) {
           guttered = true;
           ballVx = 0;
           sfx.gutter();
@@ -1337,52 +1378,30 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
 
         ball.position.x = ballX;
         ball.position.z = ballZ;
-
-        // Roll rotation
         ball.rotation.x -= speed * dt / BALL_RADIUS;
 
-        // Pin collisions — skipped entirely while in the gutter.
-        let hitAny = false;
+        // Ball vs standing pins: momentum transfer + ball deflection.
         if (!guttered) for (let i = 0; i < pins.length; i++) {
           const p = pins[i]!;
           if (p.knocked) continue;
-          const dx = ballX - p.originalPos.x;
-          const dz = ballZ - p.originalPos.z;
+          const dx = p.originalPos.x - ballX;
+          const dz = p.originalPos.z - ballZ;
           const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < (sweetThrow ? SWEET_KNOCK_DISTANCE : KNOCK_DISTANCE)) {
-            const fallDirX = dx !== 0 ? -dx : Math.random() - 0.5;
-            const fallDirZ = dz !== 0 ? -dz : -1;
-            setPinFall(p, fallDirZ, -fallDirX);
+          if (dist < KNOCK_DISTANCE) {
+            const nx = dx / (dist || 1);
+            const nz = dz / (dist || 1);
+            const impact = speed * (0.55 + 0.45 * Math.abs(nz));
+            const kick = impact * (0.22 + Math.random() * 0.12);
+            p.vx = nx * kick + ballVx * 0.3 + (Math.random() - 0.5) * 0.8;
+            p.vz = nz * kick - speed * 0.05;
+            setPinFall(p, -p.vz, p.vx);
             p.knockDelay = 0;
-            // Loud thud on the ball's direct hit; the cascade pins get
-            // softer clatter slightly later.
-            sfx.pinHit(hitAny ? 0.6 : 1);
+            // Ball deflects away from the pin and loses some momentum.
+            ballVx -= nx * speed * 0.06;
+            ballSpeed *= 0.93;
+            sfx.pinHit(1);
             sfx.happy(i);
-            hitAny = true;
-
-            // Chain reaction: knock nearby standing pins
-            for (let j = 0; j < pins.length; j++) {
-              if (j === i || pins[j]!.knocked) continue;
-              const px = p.originalPos.x - pins[j]!.originalPos.x;
-              const pz = p.originalPos.z - pins[j]!.originalPos.z;
-              const pinDist = Math.sqrt(px * px + pz * pz);
-              if (pinDist < PIN_CHAIN_DISTANCE) {
-                // Pin is close enough -- check it's roughly in the ball's travel direction
-                const dot = px * dx + pz * dz;
-                if (dot < 0.1) {
-                  // Knock with a small delay for cascade effect
-                  const rndX = px + (Math.random() - 0.5) * 0.2;
-                  const rndZ = pz + (Math.random() - 0.5) * 0.2;
-                  setPinFall(pins[j]!, -rndZ, rndX);
-                  pins[j]!.knockDelay = 0.08 + Math.random() * 0.06;
-                }
-              }
-            }
           }
-        }
-
-        if (hitAny) {
-          ballVx *= 0.7;
         }
 
         // Ball passed pins
@@ -1410,34 +1429,84 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
         bridgePivot.rotation.x = -bridgeOpen * (Math.PI / 2) * 0.95;
       }
 
-      // Animate falling pins — hot path, no allocations.
+      // Knocked pins slide, tip over and can bump into other pins.
       for (let i = 0; i < pins.length; i++) {
         const p = pins[i]!;
         if (!p.knocked) continue;
-
-        // Handle knock delay for chain reactions
         if (p.knockDelay > 0) {
           p.knockDelay -= dt;
           continue;
+        }
+        const sp0 = Math.hypot(p.vx, p.vz);
+        // A pin that is still tipping over swings its body into neighbours too.
+        const tipping = p.fallAngle < Math.PI / 2 - 0.05;
+        const sp = tipping ? Math.max(sp0, 1.6) : sp0;
+        if (sp > 0.05) {
+          p.offX += p.vx * dt;
+          p.offZ += p.vz * dt;
+          const damp = Math.exp(-PIN_FRICTION * dt);
+          p.vx *= damp;
+          p.vz *= damp;
+          const reach = PIN_HEIGHT * Math.sin(p.fallAngle);
+          for (let j = 0; j < pins.length; j++) {
+            const q = pins[j]!;
+            if (q.knocked || j === i) continue;
+            // Closest point on the pin's body segment (base -> tip) to pin q.
+            const bx0 = p.originalPos.x + p.offX;
+            const bz0 = p.originalPos.z + p.offZ;
+            const rx = q.originalPos.x - bx0;
+            const rz = q.originalPos.z - bz0;
+            const along = Math.max(0, Math.min(reach, rx * p.fallTipX + rz * p.fallTipZ));
+            const ddx = rx - p.fallTipX * along;
+            const ddz = rz - p.fallTipZ * along;
+            const d = Math.hypot(ddx, ddz);
+            if (d < PIN_HIT_RADIUS && sp > 0.9) {
+              // Not every brush topples a pin.
+              const chance = Math.min(0.95, 0.5 + sp * 0.15);
+              if (Math.random() < chance) {
+                // Push mostly along the falling pin's direction, a bit along the contact normal.
+                const nx0 = ddx / (d || 1) * 0.5 + p.fallTipX * 0.5;
+                const nz0 = ddz / (d || 1) * 0.5 + p.fallTipZ * 0.5;
+                const nl = Math.hypot(nx0, nz0) || 1;
+                const nx = nx0 / nl;
+                const nz = nz0 / nl;
+                const tr = sp * (0.45 + Math.random() * 0.35);
+                q.vx = nx * tr + (Math.random() - 0.5) * 0.6;
+                q.vz = nz * tr + (Math.random() - 0.5) * 0.6;
+                setPinFall(q, -q.vz, q.vx);
+                q.knockDelay = 0.02 + Math.random() * 0.05;
+                p.vx *= 0.55;
+                p.vz *= 0.55;
+                sfx.pinHit(0.6);
+                sfx.happy(j);
+              } else {
+                // Glancing wobble: deflect the moving pin instead.
+                p.vx = -p.vx * 0.4;
+                p.vz *= 0.6;
+              }
+            }
+          }
         }
 
         if (p.fallAngle < Math.PI / 2) {
           p.fallAngle = Math.min(Math.PI / 2, p.fallAngle + dt * 6);
           Quaternion.RotationAxisToRef(p.fallAxis, p.fallAngle, p.quat);
           p.mesh.rotationQuaternion = p.quat;
-          // Pin tips around its base; precomputed tip direction → 0 allocs/frame.
-          const cosA = Math.cos(p.fallAngle);
-          const sinA = Math.sin(p.fallAngle);
-          const tipOffset = (PIN_HEIGHT / 2) * sinA;
-          p.mesh.position.x = p.originalPos.x + p.fallTipX * tipOffset;
-          p.mesh.position.z = p.originalPos.z + p.fallTipZ * tipOffset;
-          // When the pin is fully tipped (cosA→0) it lies on its side, so its
-          // center needs to stay ~PIN_RADIUS above the lane or it clips in.
-          p.mesh.position.y =
-            p.originalPos.y + (PIN_HEIGHT / 2) * cosA + PIN_RADIUS * 1.2 * sinA;
         }
+        const cosA = Math.cos(p.fallAngle);
+        const sinA = Math.sin(p.fallAngle);
+        const tipOffset = (PIN_HEIGHT / 2) * sinA;
+        p.mesh.position.x = p.originalPos.x + p.offX + p.fallTipX * tipOffset;
+        p.mesh.position.z = p.originalPos.z + p.offZ + p.fallTipZ * tipOffset;
+        p.mesh.position.y =
+          p.originalPos.y + (PIN_HEIGHT / 2) * cosA + PIN_RADIUS * 1.2 * sinA;
       }
     });
+
+    const phraseTimer = setInterval(() => {
+      if (throwPhase === "aiming" || throwPhase === "power") floatPhrase(hudDiv);
+    }, 9000);
+    setTimeout(() => floatPhrase(hudDiv, `Go, ${PLAYER_NAME}!`), 1200);
 
     engine.runRenderLoop(() => scene.render());
     const onResize = () => engine.resize();
@@ -1450,6 +1519,7 @@ export function Game({ onScore, onGameOver, onStats, character }: GameProps) {
       canvas.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("resize", onResize);
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
+      clearInterval(phraseTimer);
       sfx.dispose();
       // Clean up HUD
       hudDiv.remove();
