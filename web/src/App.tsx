@@ -6,13 +6,12 @@ import type { Profile, LiveStats } from "./profile";
 import { badgeToast, fireworks, PLAYER_NAME } from "./fx";
 import { Game } from "./components/Game";
 import type { FrameStars } from "./components/Game";
-import { CHARACTERS, BALLS } from "./characters";
-import type { Character, BallSkin } from "./characters";
+import { CHARACTERS } from "./characters";
+import type { Character } from "./characters";
 import type { GamePhase } from "./types";
 
 const BEST_SCORE_KEY = "rainbow-strike-bowling-best";
 const BUMPERS_KEY = "rainbow-strike-bowling-bumpers";
-const BALL_KEY = "rainbow-strike-bowling-ball";
 
 // Keeps an app-level SoundFX in sync with the topbar mute button.
 function SoundSync({ sfx }: { sfx: SoundFX }) {
@@ -27,8 +26,8 @@ function TrophyRoom({ profile, onClose }: { profile: Profile; onClose: () => voi
   return (
     <div
       data-testid="trophy-room"
-      className="absolute inset-0 flex flex-col items-center gap-3 p-4 overflow-y-auto"
-      style={{ touchAction: "pan-y", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", zIndex: 35, background: "linear-gradient(160deg,#fef9c3,#e9d5ff)", fontFamily: "Fredoka,Manrope,sans-serif" }}
+      className="absolute inset-0 flex flex-col items-center gap-3 p-4 overflow-auto"
+      style={{ zIndex: 35, background: "linear-gradient(160deg,#fef9c3,#e9d5ff)", fontFamily: "Fredoka,Manrope,sans-serif" }}
     >
       <h2 style={{ fontFamily: "'Luckiest Guy',Fraunces,serif", fontSize: 40, color: "#7c3aed", marginTop: 8 }}>
         🏆 {PLAYER_NAME}'s Trophy Room
@@ -158,16 +157,15 @@ function StarBoard({ frames, current }: { frames: FrameStars[]; current: number 
 }
 
 function StartScreen({
-  onPick, bumpers, setBumpers, onTrophies, best, ball, setBall,
+  onPick, bumpers, setBumpers, onTrophies, best,
 }: {
   onPick: (c: Character) => void; bumpers: boolean; setBumpers: (b: boolean) => void; onTrophies: () => void; best: number;
-  ball: BallSkin; setBall: (b: BallSkin) => void;
 }) {
   return (
     <div
       data-testid="start-screen"
-      className="absolute inset-0 flex flex-col items-center gap-6 p-4 overflow-y-auto"
-      style={{ zIndex: 30, background: "linear-gradient(160deg,#a5f3fc,#fbcfe8 50%,#fef08a)", justifyContent: "safe center", touchAction: "pan-y", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" }}
+      className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-4"
+      style={{ zIndex: 30, background: "linear-gradient(160deg,#a5f3fc,#fbcfe8 50%,#fef08a)" }}
     >
       <h1
         style={{
@@ -205,35 +203,7 @@ function StartScreen({
           </button>
         ))}
       </div>
-      <div className="flex flex-col items-center gap-2" style={{ fontFamily: "Manrope,sans-serif", maxWidth: 760 }}>
-        <p style={{ fontWeight: 900, fontSize: 20, color: "#6d28d9", margin: 0 }}>Pick your ball: {ball.name}</p>
-        <div className="flex gap-2 flex-wrap justify-center">
-          {BALLS.map((b) => {
-            const studs = b.studColors ?? [b.studColor];
-            const bg = b.id === "hero"
-              ? "conic-gradient(#1fb6ff 0 25%,#22c55e 0 50%,#ff4fb8 0 75%,#b14cff 0)"
-              : `radial-gradient(circle at 30% 30%, ${studs[0]} 0 14%, transparent 15%), radial-gradient(circle at 68% 55%, ${studs[1 % studs.length]} 0 13%, transparent 14%), radial-gradient(circle at 38% 74%, ${studs[2 % studs.length]} 0 12%, transparent 13%), ${b.ballColor}`;
-            const on = b.id === ball.id;
-            return (
-              <button
-                key={b.id}
-                data-testid={`ball-${b.id}`}
-                onClick={() => setBall(b)}
-                title={b.name}
-                aria-label={`${b.name} ball`}
-                aria-pressed={on}
-                style={{
-                  width: 52, height: 52, borderRadius: "50%", background: bg, cursor: "pointer",
-                  border: on ? "4px solid #7c3aed" : "4px solid #fff",
-                  boxShadow: on ? "0 0 0 4px #fde047, inset -6px -6px 0 rgba(0,0,0,0.18)" : "inset -6px -6px 0 rgba(0,0,0,0.18), 0 4px 0 rgba(0,0,0,0.12)",
-                  transform: on ? "scale(1.12)" : "none", transition: "transform .15s",
-                }}
-              />
-            );
-          })}
-        </div>
-      </div>
-      <div className="flex gap-3 flex-wrap justify-center" style={{ fontFamily: "Manrope,sans-serif", paddingBottom: 8 }}>
+      <div className="flex gap-3 flex-wrap justify-center" style={{ fontFamily: "Manrope,sans-serif" }}>
         <button
           data-testid="bumpers-toggle"
           onClick={() => setBumpers(!bumpers)}
@@ -277,13 +247,6 @@ export default function App() {
   const setBumpers = useCallback((b: boolean) => {
     setBumpersState(b);
     try { localStorage.setItem(BUMPERS_KEY, b ? "1" : "0"); } catch { /* ignore */ }
-  }, []);
-  const [ball, setBallState] = useState<BallSkin>(() => {
-    try { return BALLS.find((b) => b.id === localStorage.getItem(BALL_KEY)) ?? BALLS[0]!; } catch { return BALLS[0]!; }
-  });
-  const setBall = useCallback((b: BallSkin) => {
-    setBallState(b);
-    try { localStorage.setItem(BALL_KEY, b.id); } catch { /* ignore */ }
   }, []);
   const [showTrophies, setShowTrophies] = useState(false);
   const [newAwards, setNewAwards] = useState<string[]>([]);
@@ -438,19 +401,19 @@ export default function App() {
     >
       <div className="relative w-full h-full min-h-[400px]">
         {phase !== "menu" && (
-          <Game key={gameKey} character={character} ballSkin={ball} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
+          <Game key={gameKey} character={character} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
         )}
         {phase === "playing" && <StarBoard frames={frames} current={frame} />}
         <SoundSync sfx={appSfx} />
         {phase === "menu" && (
-          <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} ball={ball} setBall={setBall} />
+          <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} />
         )}
         {showTrophies && <TrophyRoom profile={profile} onClose={() => setShowTrophies(false)} />}
         {phase === "over" && (
           <div
             data-testid="trophy-screen"
-            className="absolute inset-0 flex flex-col items-center gap-4 p-4 overflow-y-auto"
-            style={{ zIndex: 30, background: "linear-gradient(160deg,rgba(254,240,138,0.95),rgba(251,207,232,0.95))", justifyContent: "safe center", touchAction: "pan-y", overscrollBehavior: "contain" }}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-4"
+            style={{ zIndex: 30, background: "linear-gradient(160deg,rgba(254,240,138,0.95),rgba(251,207,232,0.95))" }}
           >
             <div style={{ fontSize: 110, lineHeight: 1 }}>🏆</div>
             <p style={{ fontFamily: "Fraunces,serif", fontWeight: 900, fontSize: "clamp(28px,6vw,52px)", color: "#7c3aed", textAlign: "center" }}>
@@ -474,7 +437,7 @@ export default function App() {
                 })}
               </div>
             )}
-            <div className="flex gap-3 flex-wrap justify-center">
+            <div className="flex gap-3">
               <button
                 onClick={start}
                 className="px-8 py-4 rounded-2xl font-black text-xl"

@@ -29,8 +29,7 @@ import { PhysicsMotionType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlug
 import "@babylonjs/core/Physics/v2/physicsEngineComponent";
 import type { Character } from "../characters";
 import { CHARACTERS } from "../characters";
-import { PLAYER_NAME, NAME_PHRASES, STRIKE_PHRASES, SPARE_PHRASES, MISS_PHRASES, BIG_HIT_PHRASES, pick, floatPhrase, animalDisco, fireworks } from "../fx";
-import type { BallSkin } from "../characters";
+import { PLAYER_NAME, NAME_PHRASES, floatPhrase, animalDisco, fireworks } from "../fx";
 
 export interface FrameStars {
   pins: number;
@@ -54,7 +53,6 @@ interface GameProps {
   onGameOver: () => void;
   onStats?: (stats: { frame: number; frames?: FrameStars[] }) => void;
   character?: Character;
-  ballSkin?: BallSkin;
   bumpers?: boolean;
   onThrow?: (t: { pins: number; strike: boolean; spare: boolean; gutter: boolean; frame: number }) => void;
 }
@@ -101,13 +99,7 @@ const PIN_HIT_RADIUS = 0.55; // knocked pin vs standing pin contact distance
 const PIN_FRICTION = 2.2;
 const RAINBOW = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff"];
 const PIN_COLORS = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff", "#ff4fb8", "#00d1c1", "#ffffff"];
-const CHEERS = [
-  "Great job!", "Awesome!", "Way to go!", "Super!", "Nice roll!", "You rock!", "Wow!", "Fantastic!", "Brilliant!",
-  "Amazing!", "Outstanding!", "Incredible!", "Woo-hoo!", "Yippee!", "Keep it up!", "Rock and roll!", "Nailed it!",
-  "Look at those pins fly!", "Super duper!", "Magnificent!", "Spectacular!", "Bravo!", "High five!", "Boom!",
-  "That's the way!", "Pin-credible!", "Bowl-tastic!", "Splendid!", "You're a star!", "Totally awesome!", "Mega roll!",
-  "Excellent!", "Hip hip hooray!", "Out of this world!", "Ka-pow!", "Superb!",
-];
+const CHEERS = ["Great job!", "Awesome!", "Way to go!", "Super!", "Nice roll!", "You rock!", "Wow!"];
 const TOTAL_FRAMES = 10;
 
 interface PinState {
@@ -206,9 +198,7 @@ function createWoodTexture(scene: Scene): DynamicTexture {
   return tex;
 }
 
-export function Game({ onScore, onGameOver, onStats, character, ballSkin, bumpers = false, onThrow }: GameProps) {
-  const ballSkinRef = useRef(ballSkin);
-  ballSkinRef.current = ballSkin;
+export function Game({ onScore, onGameOver, onStats, character, bumpers = false, onThrow }: GameProps) {
   const bumpersRef = useRef(bumpers);
   bumpersRef.current = bumpers;
   const onThrowRef = useRef(onThrow);
@@ -498,8 +488,7 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, bumper
     let firstCrash = false;
     let shake = 0;
     let camT = 0;
-    const camTarget = new Vector3(0, 0, -11);
-    const camPos = new Vector3(0, 4.6, 10.5);
+    const camTarget = new Vector3(0, 0, -10);
     const PIN_MASS = 1.5;
     const BALL_MASS = 7;
     function makeStatic(name: string, w: number, h: number, d: number, x: number, y: number, z: number, restitution = 0.2, friction = 0.5): PhysicsBody {
@@ -680,19 +669,12 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, bumper
       { diameter: BALL_RADIUS * 2, segments: 16 },
       scene,
     );
-    const skin = ballSkinRef.current && ballSkinRef.current.id !== "hero" ? ballSkinRef.current : null;
-    const ballHex = skin ? skin.ballColor : characterRef.current.ballColor;
-    const ballGlow = skin?.glow ?? 0;
     const ballMat = new StandardMaterial("ballMat", scene);
-    ballMat.diffuseColor = Color3.FromHexString(ballHex);
-    ballMat.emissiveColor = Color3.FromHexString(ballHex).scale(0.2 + ballGlow);
-    const studHexes = skin ? (skin.studColors ?? [skin.studColor]) : [characterRef.current.studColor];
-    const studMats = studHexes.map((hex, i) => {
-      const m = new StandardMaterial(`ballStudMat${i}`, scene);
-      m.diffuseColor = Color3.FromHexString(hex);
-      m.emissiveColor = m.diffuseColor.scale(0.2 + ballGlow);
-      return m;
-    });
+    ballMat.diffuseColor = Color3.FromHexString(characterRef.current.ballColor);
+    ballMat.emissiveColor = Color3.FromHexString(characterRef.current.ballColor).scale(0.2);
+    const studMat = new StandardMaterial("ballStudMat", scene);
+    studMat.diffuseColor = Color3.FromHexString(characterRef.current.studColor);
+    studMat.emissiveColor = studMat.diffuseColor.scale(0.2);
     {
       // Fibonacci-sphere distribution of LEGO studs over the ball.
       const N = 26;
@@ -706,7 +688,7 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, bumper
         stud.parent = null;
         stud.position = n.scale(BALL_RADIUS);
         stud.rotationQuaternion = Quaternion.FromUnitVectorsToRef(up, n, new Quaternion());
-        stud.material = studMats[k % studMats.length]!;
+        stud.material = studMat;
         // parent after placement so positions are in ball-local space
         stud.parent = ball;
       }
@@ -1273,25 +1255,23 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, bumper
       if (Math.random() < 0.6) floatPhrase(hudDiv);
       bridgeTarget = 0;
       if (isStrike) {
-        showBigLabel("🌈 STRIKE! 🌈", Math.random() < 0.4 ? characterRef.current.strikeCheer : pick(STRIKE_PHRASES), 2400);
-        setTimeout(() => floatPhrase(hudDiv, pick(STRIKE_PHRASES)), 700);
+        showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 2400);
         bridgeTarget = 1;
         sfx.strike();
         confetti(260);
         fireworks(hudDiv, 12, 2600);
         animalDisco(hudDiv, 4200);
       } else if (isSpare) {
-        showBigLabel("✨ SPARE! ✨", pick(SPARE_PHRASES), 2000);
+        showBigLabel("✨ SPARE! ✨", `You got them all! ${cheer}`, 2000);
         sfx.spare();
         confetti(140);
         fireworks(hudDiv, 6, 1800);
         animalDisco(hudDiv, 3200);
       } else if (newlyKnocked === 0) {
-        showBigLabel(guttered ? "Oops, gutter!" : "So close!", pick(MISS_PHRASES));
+        showBigLabel(guttered ? "Oops, gutter!" : "So close!", `Try again, ${PLAYER_NAME}! You can do it!`);
         if (!guttered) sfx.encourage();
       } else {
-        showBigLabel(`${newlyKnocked} pin${newlyKnocked === 1 ? "" : "s"}!`, newlyKnocked >= 7 && Math.random() < 0.6 ? pick(BIG_HIT_PHRASES) : cheer);
-        if (newlyKnocked >= 5) setTimeout(() => floatPhrase(hudDiv), 500);
+        showBigLabel(`${newlyKnocked} pin${newlyKnocked === 1 ? "" : "s"}!`, cheer);
         sfx.cheer();
         if (newlyKnocked >= 7) animalDisco(hudDiv, 2600);
       }
@@ -1658,27 +1638,19 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, bumper
       // Knocked pins slide, tip over and can bump into other pins.
       // Crash cam: swoop toward the pins as the ball arrives, then back.
       {
-        // Chase cam: ride right behind the ball as it rolls, then hold a
-        // close-up of the pins while they settle. Smoothly eases between views.
+        const want = physOn && ((throwPhase === "rolling" && ballZ < -5) || throwPhase === "settling") ? 1 : 0;
+        const prev = camT;
+        camT += (want - camT) * Math.min(1, dt * (want ? 2.2 : 3.5));
+        if (Math.abs(camT - want) < 0.002) camT = want;
         shake = Math.max(0, shake - dt);
-        let px: number, py: number, pz: number, tx: number, ty: number, tz: number;
-        if (throwPhase === "rolling") {
-          const bz = Math.max(ballZ, PIN_Z_START + 4.2);
-          px = ballX * 0.55; py = 1.35; pz = bz + 3.1;
-          tx = ballX * 0.35; ty = 0.45; tz = Math.max(bz - 8, PIN_Z_START - 2.5);
-        } else if (throwPhase === "settling" || throwPhase === "done") {
-          px = 0; py = 2.1; pz = PIN_Z_START + 5.4; tx = 0; ty = 0.5; tz = PIN_Z_START - 1.2;
-        } else {
-          px = aimX * 0.3; py = 4.6; pz = 10.5; tx = aimX * 0.15; ty = 0; tz = -11;
+        if (camT !== prev || shake > 0 || camT > 0) {
+          const e = camT * camT * (3 - 2 * camT);
+          const sx = shake > 0 ? (Math.random() - 0.5) * shake * 0.6 : 0;
+          const sy = shake > 0 ? (Math.random() - 0.5) * shake * 0.4 : 0;
+          camera.position.set(sx, 6.5 + (3.9 - 6.5) * e + sy, 13.5 + (-9 - 13.5) * e);
+          camTarget.set(0, 0.5 * e, -10 + (-19.6 + 10) * e);
+          camera.setTarget(camTarget);
         }
-        const k = 1 - Math.exp(-dt * (throwPhase === "rolling" ? 6 : 3));
-        camPos.x += (px - camPos.x) * k; camPos.y += (py - camPos.y) * k; camPos.z += (pz - camPos.z) * k;
-        camTarget.x += (tx - camTarget.x) * k; camTarget.y += (ty - camTarget.y) * k; camTarget.z += (tz - camTarget.z) * k;
-        const sx = shake > 0 ? (Math.random() - 0.5) * shake * 0.6 : 0;
-        const sy = shake > 0 ? (Math.random() - 0.5) * shake * 0.4 : 0;
-        camera.position.set(camPos.x + sx, camPos.y + sy, camPos.z);
-        camera.setTarget(camTarget);
-        void camT;
       }
       if (!physOn) for (let i = 0; i < pins.length; i++) {
         const p = pins[i]!;
