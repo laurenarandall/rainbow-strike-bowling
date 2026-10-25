@@ -2,7 +2,7 @@
 
 A bright, kid-friendly 3D bowling game for young players: rainbow lanes and pins, bumpers on by default, an easy one-tap power meter, confetti and fanfare on strikes, and lots of cheering.
 
-**Play it:** https://bvilleventures.github.io/rainbow-strike-bowling/
+**Play it:** https://laurenarandall.github.io/rainbow-strike-bowling/
 
 ## How to play
 1. Drag left/right (or use the arrow keys) to aim, then tap (or press Space).
