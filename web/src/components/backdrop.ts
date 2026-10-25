@@ -472,6 +472,7 @@ export function buildBackdrop(scene: Scene, theme: ThemeDef, glow: GlowLayer): B
       c.fillStyle = "#fff"; c.fillText("?", w / 2 + 3, h / 2 + 7);
       c.fillStyle = "#8a4b00"; c.fillText("?", w / 2, h / 2 + 4);
     });
+    qTex.wAng = Math.PI; // box faces show the texture upside down
     for (let i = 0; i < 8; i++) {
       const side = i % 2 ? 1 : -1;
       const q = MeshBuilder.CreateBox(`qBlock${i}`, { size: 1.6 }, scene);

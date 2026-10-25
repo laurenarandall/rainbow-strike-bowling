@@ -64,6 +64,12 @@ interface GameProps {
 const START_Z = FOUL_Z + 0.6; // ball release point, just behind the foul line
 const AIM_MAX = HALF_W - BALL_R - 0.05;
 const PIN_COM_Y = 0.145 * S; // pin centre of mass above its base
+// Kid-friendly pin action: the ball drives through the pins a little harder
+// than real life so a good pocket hit strikes about a third of the time.
+const BALL_MASS_BOOST = 1.5;
+const PIN_FRICTION = 0.3;
+const PIN_RESTITUTION = 0.6;
+const STRIKE_ASSIST = 0.3;
 // Big green sweet spot on the power bar.
 const SWEET_MIN = 0.6;
 const SWEET_MAX = 0.72;
@@ -208,7 +214,13 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       accents: isHero ? [characterRef.current.studColor] : (skin.studColors ?? [skin.studColor]),
       glow: skin.glow ?? 0,
     };
-    const ballMass = ballMassKg(feel.pounds);
+    // ?tune=bm:1.4,pf:0.3,pr:0.6,pd:0.12,com:0.145 lets the strike-rate script try physics settings.
+    const tune: Record<string, number> = {};
+    for (const kv of (new URLSearchParams(window.location.search).get("tune") ?? "").split(",")) {
+      const [k, v] = kv.split(":");
+      if (k && v && Number.isFinite(+v)) tune[k] = +v;
+    }
+    const ballMass = ballMassKg(feel.pounds) * (tune.bm ?? BALL_MASS_BOOST);
     const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
     // ?q=0|1|2 pins the quality (and turns off the automatic fallback).
     const qParam = new URLSearchParams(window.location.search).get("q");
@@ -230,6 +242,9 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       cape.material = cm;
     }
     let capePhaseWasRolling = false;
+    let entryX: number | null = null;
+    let assistUsed = 0;
+    const pinPeek = new URLSearchParams(window.location.search).get("cam") === "pins";
     let animT = 0;
     const { ball, bumperMeshes, bridgePivot } = world;
     let bridgeTarget = 0; // 0 = up (closed), 1 = down (open)
@@ -270,18 +285,19 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       p.mesh.rotationQuaternion = p.mesh.rotationQuaternion ?? Quaternion.Identity();
       const body = new PhysicsBody(p.mesh, PhysicsMotionType.DYNAMIC, false, scene);
       body.shape = world.getPinHull();
+      body.shape.material = { friction: tune.pf ?? PIN_FRICTION, restitution: tune.pr ?? PIN_RESTITUTION };
       // Real pin: 1.59 kg, centre of mass ~14.5 cm up. Havok computes the
       // inertia for unit density, so scale it to the real mass.
       const mp = body.computeMassProperties();
       const k = mp.mass && mp.mass > 0 ? PIN_MASS_KG / mp.mass : 1;
       body.setMassProperties({
         mass: PIN_MASS_KG,
-        centerOfMass: new Vector3(0, PIN_COM_Y, 0),
+        centerOfMass: new Vector3(0, tune.com !== undefined ? tune.com * S : PIN_COM_Y, 0),
         inertia: (mp.inertia ?? new Vector3(1, 1, 1)).scale(k),
         inertiaOrientation: mp.inertiaOrientation ?? Quaternion.Identity(),
       });
-      body.setAngularDamping(0.12);
-      body.setLinearDamping(0.04);
+      body.setAngularDamping(tune.pad ?? 0.12);
+      body.setLinearDamping(tune.pld ?? 0.04);
       body.setCollisionCallbackEnabled(true);
       body.getCollisionObservable().add(onCrash);
       p.body = body;
@@ -785,6 +801,8 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       const totalDown = frame.throws.reduce((a, b) => a + b, 0);
       const isSpare = currentThrow === 1 && totalDown >= 10;
 
+      const rlog = (window as unknown as { __rsbLog?: unknown[] }).__rsbLog;
+      if (rlog) rlog.push({ assists: assistUsed, pins: newlyKnocked, first: currentThrow === 0, entryX: entryX === null ? null : +entryX.toFixed(3), gutter: guttered });
       const thm = getTheme(themeRef.current);
       const pool = [...CHEERS, ...characterRef.current.cheers, ...characterRef.current.cheers, ...NAME_PHRASES, ...thm.cheers, ...thm.cheers];
       if (thm.sfx === "coin" && newlyKnocked > 0) for (let k = 0; k < Math.min(newlyKnocked, 6); k++) setTimeout(() => sfx.coin(), 120 + k * 110);
@@ -970,6 +988,15 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       showBigLabel(`${thc.emoji} STRIKE! ${thc.emoji}`, pick(thc.strikeCheers), 4000);
     };
     (window as unknown as { __rsbThrow?: typeof scriptedThrow }).__rsbThrow = scriptedThrow;
+    // Test hook: re-rack all ten pins for a fresh first ball (used by the strike-rate script).
+    (window as unknown as { __rsbRerack?: () => boolean }).__rsbRerack = () => {
+      if (throwPhase !== "aiming") return false;
+      for (const f of frames) { f.throws.length = 0; f.pinsDown.length = 0; }
+      currentFrame = 0;
+      currentThrow = 0;
+      nextThrow(true);
+      return true;
+    };
     let fps = 60;
     (window as unknown as { __rsbDebug?: () => unknown }).__rsbDebug = () => ({
       physOn,
@@ -1061,6 +1088,8 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       animT += dt;
       world.backdrop.update(animT, dt);
       capeNode.position.set(ball.position.x, ball.position.y + 0.25, ball.position.z);
+      if (throwPhase === "rolling" && entryX === null && ball.position.z < PIN_Z_START + 3) entryX = ball.position.x;
+      if (throwPhase === "aiming") entryX = null;
       if (cape) {
         const rollingNow = throwPhase === "rolling" || throwPhase === "settling";
         if (rollingNow && !capePhaseWasRolling) cape.reset();
@@ -1178,7 +1207,26 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
         }
         void vz;
       } else if (throwPhase === "settling") {
+        const prevSettle = settleTimer;
         settleTimer += dt;
+        // Kid-friendly "pin action": on a good pocket hit, flying pins sometimes
+        // carry the last corner pins down too, so strikes happen ~1/3 of the time.
+        if (physOn && currentThrow === 0 && prevSettle < 0.6 && settleTimer >= 0.6 && entryX !== null) {
+          const ax = Math.abs(entryX);
+          const standing = pins.filter((p) => p.body && !p.knocked && p.mesh.getDirection(Vector3.Up()).y > 0.85 && p.mesh.position.y > -0.25);
+          if (ax >= 0.12 && ax <= 0.62 && standing.length >= 1 && standing.length <= 3 && Math.random() < (tune.as ?? STRIKE_ASSIST)) {
+            for (const p of standing) {
+              const pos = p.mesh.position;
+              const dir = new Vector3(pos.x - entryX * 0.3, 0, pos.z - (PIN_Z_START + 1.5));
+              dir.y = 0;
+              dir.normalize();
+              dir.z -= 0.4;
+              dir.normalize();
+              p.body!.applyImpulse(dir.scale(tune.ai ?? 5), new Vector3(pos.x, pos.y + PIN_H * 0.85, pos.z));
+            }
+            assistUsed++;
+          }
+        }
         let moving = false;
         if (physOn) {
           for (const p of pins) {
@@ -1234,6 +1282,11 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
           px = crashPx - dolly * 0.6; py = crashPy + dolly * 0.25; pz = crashPz - dolly * 0.8;
           tx = crashTx; ty = crashTy; tz = crashTz;
           rate = 4;
+        } else if (pinPeek) {
+          // Debug/screenshot view: ?cam=pins looks at the rack while aiming.
+          px = 0.6; py = 1.1; pz = PIN_Z_START + 4.2;
+          tx = 0; ty = 0.45; tz = PIN_Z_START - 1.5;
+          rate = 6;
         } else {
           px = aimX * 0.4; py = 3.0; pz = START_Z + 7.2;
           tx = aimX * 0.15; ty = 0.2; tz = START_Z - 28;
