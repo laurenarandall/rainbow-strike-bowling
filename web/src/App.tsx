@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import type { ReactNode } from "react";
 import { GameShell, GameTopbar, useSound } from "@freegamestore/games";
 import { SoundFX } from "./sound";
 import { AWARDS, loadProfile, saveProfile, earnedAwards } from "./profile";
@@ -6,12 +7,15 @@ import type { Profile, LiveStats } from "./profile";
 import { badgeToast, fireworks, PLAYER_NAME } from "./fx";
 import { Game } from "./components/Game";
 import type { FrameStars } from "./components/Game";
-import { CHARACTERS } from "./characters";
-import type { Character } from "./characters";
+import { CHARACTERS, BALLS, ballFeel } from "./characters";
+import type { Character, BallSkin } from "./characters";
+import { PIN_STYLES, loadPinStyleId, savePinStyleId } from "./gear";
+import type { PinStyleId } from "./gear";
 import type { GamePhase } from "./types";
 
 const BEST_SCORE_KEY = "rainbow-strike-bowling-best";
 const BUMPERS_KEY = "rainbow-strike-bowling-bumpers";
+const BALL_KEY = "rainbow-strike-bowling-ball";
 
 // Keeps an app-level SoundFX in sync with the topbar mute button.
 function SoundSync({ sfx }: { sfx: SoundFX }) {
@@ -26,8 +30,8 @@ function TrophyRoom({ profile, onClose }: { profile: Profile; onClose: () => voi
   return (
     <div
       data-testid="trophy-room"
-      className="absolute inset-0 flex flex-col items-center gap-3 p-4 overflow-auto"
-      style={{ zIndex: 35, background: "linear-gradient(160deg,#fef9c3,#e9d5ff)", fontFamily: "Fredoka,Manrope,sans-serif" }}
+      className="absolute inset-0 flex flex-col items-center gap-3 p-4 overflow-y-auto"
+      style={{ touchAction: "pan-y", overscrollBehavior: "contain", zIndex: 35, background: "linear-gradient(160deg,#fef9c3,#e9d5ff)", fontFamily: "Fredoka,Manrope,sans-serif" }}
     >
       <h2 style={{ fontFamily: "'Luckiest Guy',Fraunces,serif", fontSize: 40, color: "#7c3aed", marginTop: 8 }}>
         🏆 {PLAYER_NAME}'s Trophy Room
@@ -156,20 +160,66 @@ function StarBoard({ frames, current }: { frames: FrameStars[]; current: number 
   );
 }
 
+/** CSS look of a ball in the picker (matches the 3D finish). */
+function ballPreview(b: BallSkin, hero: Character): string {
+  const f = ballFeel(b).finish;
+  const acc = b.studColors ?? [b.studColor];
+  const a0 = acc[0]!, a1 = acc[1 % acc.length]!, a2 = acc[2 % acc.length]!;
+  const shine = "radial-gradient(circle at 32% 28%, rgba(255,255,255,0.85) 0 7%, rgba(255,255,255,0) 22%)";
+  switch (f) {
+    case "studs":
+      return `${shine}, radial-gradient(circle at 30% 60%, ${hero.studColor} 0 10%, transparent 11%), radial-gradient(circle at 65% 40%, ${hero.studColor} 0 10%, transparent 11%), radial-gradient(circle at 60% 75%, ${hero.studColor} 0 10%, transparent 11%), ${hero.ballColor}`;
+    case "swirl":
+      return b.id === "rainbow"
+        ? `${shine}, conic-gradient(from 30deg, #ff3b3b, #ff8c1a, #ffd60a, #3ddc4a, #1fb6ff, #4c5cff, #b14cff, #ff3b3b)`
+        : `${shine}, conic-gradient(from 10deg, ${b.ballColor}, ${a0}, ${b.ballColor}, ${a1}, ${b.ballColor})`;
+    case "galaxy":
+      return `${shine}, radial-gradient(circle at 70% 30%, ${a0} 0 3%, transparent 4%), radial-gradient(circle at 30% 70%, ${a1} 0 3%, transparent 4%), radial-gradient(circle at 60% 65%, ${a2} 0 22%, transparent 45%), ${b.ballColor}`;
+    case "fire":
+      return `${shine}, radial-gradient(circle at 50% 80%, #facc15 0 15%, #f97316 35%, #b91c1c 70%)`;
+    case "waves":
+      return `${shine}, repeating-linear-gradient(160deg, ${b.ballColor} 0 6px, ${a0} 6px 9px)`;
+    case "stripes":
+      return `${shine}, repeating-linear-gradient(90deg, ${b.ballColor} 0 7px, ${a0} 7px 14px)`;
+    case "pearl":
+      return `${shine}, conic-gradient(from 90deg, ${b.ballColor}, ${a0}, ${a1}, ${a2}, ${b.ballColor})`;
+    case "metal":
+      return `${shine}, linear-gradient(135deg, #fff6c2, ${b.ballColor} 40%, #854d0e 75%, #fde68a)`;
+    case "ice":
+      return `${shine}, linear-gradient(135deg, #ffffff, ${b.ballColor} 45%, ${a1} 80%)`;
+    case "spots":
+      return `${shine}, radial-gradient(circle at 35% 65%, ${a0} 0 12%, transparent 13%), radial-gradient(circle at 70% 45%, ${a1} 0 10%, transparent 11%), ${b.ballColor}`;
+    case "scales":
+      return `${shine}, radial-gradient(circle at 50% 50%, transparent 0 40%, ${a0} 41% 44%, transparent 45%) 0 0/12px 12px, ${b.ballColor}`;
+  }
+}
+
+function PickerRow({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col items-center gap-2" style={{ fontFamily: "Manrope,sans-serif", maxWidth: 860 }}>
+      <p style={{ fontWeight: 900, fontSize: 20, color: "#6d28d9", margin: 0, textAlign: "center" }}>{title}</p>
+      <div className="flex gap-2 flex-wrap justify-center">{children}</div>
+    </div>
+  );
+}
+
 function StartScreen({
-  onPick, bumpers, setBumpers, onTrophies, best,
+  onPick, bumpers, setBumpers, onTrophies, best, ball, setBall, pinStyle, setPinStyle,
 }: {
   onPick: (c: Character) => void; bumpers: boolean; setBumpers: (b: boolean) => void; onTrophies: () => void; best: number;
+  ball: BallSkin; setBall: (b: BallSkin) => void; pinStyle: PinStyleId; setPinStyle: (p: PinStyleId) => void;
 }) {
+  const feel = ballFeel(ball);
+  const hookWord = feel.hook >= 1.3 ? "big hook" : feel.hook >= 0.95 ? "medium hook" : "goes straight";
   return (
     <div
       data-testid="start-screen"
-      className="absolute inset-0 flex flex-col items-center justify-center gap-6 p-4"
-      style={{ zIndex: 30, background: "linear-gradient(160deg,#a5f3fc,#fbcfe8 50%,#fef08a)" }}
+      className="absolute inset-0 flex flex-col items-center gap-4 p-4 overflow-y-auto"
+      style={{ zIndex: 30, background: "linear-gradient(160deg,#a5f3fc,#fbcfe8 50%,#fef08a)", justifyContent: "safe center", touchAction: "pan-y", overscrollBehavior: "contain" }}
     >
       <h1
         style={{
-          fontFamily: "Fraunces,serif", fontWeight: 900, fontSize: "clamp(36px,8vw,72px)",
+          fontFamily: "Fraunces,serif", fontWeight: 900, fontSize: "clamp(32px,6.5vw,64px)",
           lineHeight: 1, textAlign: "center", background: RAINBOW_TEXT,
           WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent",
           filter: "drop-shadow(3px 3px 0 #fff)",
@@ -177,33 +227,78 @@ function StartScreen({
       >
         🏰 Rainbow Strike Bowling 🎳
       </h1>
-      <p style={{ fontFamily: "Manrope,sans-serif", fontWeight: 800, fontSize: 24, color: "#6d28d9" }}>
-        Who do you want to be, {PLAYER_NAME}?
+      <PickerRow title={`Pick your ball: ${ball.name} · ${feel.pounds} lb · ${hookWord}`}>
+        {BALLS.map((b) => {
+          const on = b.id === ball.id;
+          const f = ballFeel(b);
+          return (
+            <button
+              key={b.id}
+              data-testid={`ball-${b.id}`}
+              onClick={() => setBall(b)}
+              title={`${b.name} (${f.pounds} lb)`}
+              aria-label={`${b.name} ball, ${f.pounds} pounds`}
+              aria-pressed={on}
+              className="flex flex-col items-center"
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}
+            >
+              <span
+                style={{
+                  width: 50, height: 50, borderRadius: "50%", background: ballPreview(b, CHARACTERS[0]!), display: "block",
+                  border: on ? "4px solid #7c3aed" : "4px solid #fff",
+                  boxShadow: on ? "0 0 0 4px #fde047, inset -6px -6px 10px rgba(0,0,0,0.3)" : "inset -6px -6px 10px rgba(0,0,0,0.3), 0 4px 0 rgba(0,0,0,0.12)",
+                  transform: on ? "scale(1.12)" : "none", transition: "transform .15s",
+                }}
+              />
+              <span style={{ fontSize: 11, fontWeight: 900, color: "#4c1d95" }}>{f.pounds} lb</span>
+            </button>
+          );
+        })}
+      </PickerRow>
+      <PickerRow title={`Pick your pins: ${PIN_STYLES.find((p) => p.id === pinStyle)?.name ?? ""}`}>
+        {PIN_STYLES.map((p) => {
+          const on = p.id === pinStyle;
+          return (
+            <button
+              key={p.id}
+              data-testid={`pins-${p.id}`}
+              onClick={() => setPinStyle(p.id)}
+              aria-pressed={on}
+              title={p.blurb}
+              className="flex flex-col items-center gap-1 rounded-2xl px-3 py-2"
+              style={{
+                background: "#fff", cursor: "pointer", fontWeight: 900, fontSize: 13, color: "#1f2937",
+                border: on ? "4px solid #7c3aed" : "4px solid #fff", boxShadow: on ? "0 0 0 3px #fde047" : "0 4px 0 rgba(0,0,0,0.12)",
+                transform: on ? "scale(1.08)" : "none", transition: "transform .15s",
+              }}
+            >
+              <span style={{ width: 18, height: 46, borderRadius: "9px 9px 6px 6px / 14px 14px 6px 6px", background: p.preview, display: "block", boxShadow: "inset -3px 0 4px rgba(0,0,0,0.25)", ...(p.id === "neon" ? { filter: "drop-shadow(0 0 6px #39ff14)" } : {}) }} />
+              <span>{p.emoji} {p.name}</span>
+            </button>
+          );
+        })}
+      </PickerRow>
+      <p style={{ fontFamily: "Manrope,sans-serif", fontWeight: 800, fontSize: 22, color: "#6d28d9", margin: 0, textAlign: "center" }}>
+        Who do you want to be, {PLAYER_NAME}? Tap to play!
       </p>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {CHARACTERS.map((c) => (
           <button
             key={c.id}
             data-testid={`pick-${c.id}`}
             onClick={() => onPick(c)}
-            className="flex flex-col items-center gap-2 rounded-3xl px-6 py-4 transition-transform hover:scale-105 active:scale-95"
+            className="flex flex-col items-center gap-1 rounded-3xl px-5 py-3 transition-transform hover:scale-105 active:scale-95"
             style={{
               background: "#fff", border: `6px solid ${c.ballColor}`, cursor: "pointer",
               boxShadow: `0 8px 0 ${c.ballColor}`, fontFamily: "Manrope,sans-serif",
             }}
           >
-            <span style={{ fontSize: 64, lineHeight: 1 }}>{c.emoji}</span>
-            <span style={{ fontSize: 22, fontWeight: 900, color: "#1f2937" }}>{c.name}</span>
-            <span
-              style={{
-                width: 34, height: 34, borderRadius: "50%", background: c.ballColor,
-                boxShadow: `inset -4px -4px 0 rgba(0,0,0,0.2), 0 0 0 3px ${c.studColor}`,
-              }}
-            />
+            <span style={{ fontSize: 52, lineHeight: 1 }}>{c.emoji}</span>
+            <span style={{ fontSize: 20, fontWeight: 900, color: "#1f2937" }}>{c.name}</span>
           </button>
         ))}
       </div>
-      <div className="flex gap-3 flex-wrap justify-center" style={{ fontFamily: "Manrope,sans-serif" }}>
+      <div className="flex gap-3 flex-wrap justify-center" style={{ fontFamily: "Manrope,sans-serif", paddingBottom: 8 }}>
         <button
           data-testid="bumpers-toggle"
           onClick={() => setBumpers(!bumpers)}
@@ -247,6 +342,18 @@ export default function App() {
   const setBumpers = useCallback((b: boolean) => {
     setBumpersState(b);
     try { localStorage.setItem(BUMPERS_KEY, b ? "1" : "0"); } catch { /* ignore */ }
+  }, []);
+  const [ball, setBallState] = useState<BallSkin>(() => {
+    try { return BALLS.find((b) => b.id === localStorage.getItem(BALL_KEY)) ?? BALLS[0]!; } catch { return BALLS[0]!; }
+  });
+  const setBall = useCallback((b: BallSkin) => {
+    setBallState(b);
+    try { localStorage.setItem(BALL_KEY, b.id); } catch { /* ignore */ }
+  }, []);
+  const [pinStyle, setPinStyleState] = useState<PinStyleId>(loadPinStyleId);
+  const setPinStyle = useCallback((p: PinStyleId) => {
+    setPinStyleState(p);
+    savePinStyleId(p);
   }, []);
   const [showTrophies, setShowTrophies] = useState(false);
   const [newAwards, setNewAwards] = useState<string[]>([]);
@@ -401,19 +508,19 @@ export default function App() {
     >
       <div className="relative w-full h-full min-h-[400px]">
         {phase !== "menu" && (
-          <Game key={gameKey} character={character} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
+          <Game key={gameKey} character={character} ballSkin={ball} pinStyle={pinStyle} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
         )}
         {phase === "playing" && <StarBoard frames={frames} current={frame} />}
         <SoundSync sfx={appSfx} />
         {phase === "menu" && (
-          <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} />
+          <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} ball={ball} setBall={setBall} pinStyle={pinStyle} setPinStyle={setPinStyle} />
         )}
         {showTrophies && <TrophyRoom profile={profile} onClose={() => setShowTrophies(false)} />}
         {phase === "over" && (
           <div
             data-testid="trophy-screen"
-            className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-4"
-            style={{ zIndex: 30, background: "linear-gradient(160deg,rgba(254,240,138,0.95),rgba(251,207,232,0.95))" }}
+            className="absolute inset-0 flex flex-col items-center gap-4 p-4 overflow-y-auto"
+            style={{ justifyContent: "safe center", touchAction: "pan-y", overscrollBehavior: "contain", zIndex: 30, background: "linear-gradient(160deg,rgba(254,240,138,0.95),rgba(251,207,232,0.95))" }}
           >
             <div style={{ fontSize: 110, lineHeight: 1 }}>🏆</div>
             <p style={{ fontFamily: "Fraunces,serif", fontWeight: 900, fontSize: "clamp(28px,6vw,52px)", color: "#7c3aed", textAlign: "center" }}>

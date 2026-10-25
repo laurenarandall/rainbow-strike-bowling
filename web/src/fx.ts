@@ -23,9 +23,100 @@ export const NAME_PHRASES = [
   `${PLAYER_NAME} rocks! 🎸`,
   `Way to go, ${PLAYER_NAME}!`,
   `${PLAYER_NAME}, you've got this!`,
+  `Bowling wizard ${PLAYER_NAME}! 🪄`,
+  `${PLAYER_NAME} is on fire! 🔥`,
+  `Look at ${PLAYER_NAME} go!`,
+  `${PLAYER_NAME} the Pin Smasher!`,
+  `Wow, ${PLAYER_NAME}! Wow wow wow!`,
+  `${PLAYER_NAME} for the win! 🏆`,
+  `Rainbow power, ${PLAYER_NAME}! 🌈`,
+  `${PLAYER_NAME} is unstoppable!`,
+  `Nice aim, ${PLAYER_NAME}! 🎯`,
+  `Roll it, ${PLAYER_NAME}!`,
+  `Believe in yourself, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME} makes it look easy!`,
+  `Big roll energy, ${PLAYER_NAME}!`,
+  `The pins are scared of ${PLAYER_NAME}! 😱`,
+  `${PLAYER_NAME}, bowling legend!`,
+  `So proud of you, ${PLAYER_NAME}! 💖`,
+  `${PLAYER_NAME} the Brave!`,
+  `Super ${PLAYER_NAME}! 🦸`,
+  `${PLAYER_NAME} is a rock star! ⭐`,
+  `You're a natural, ${PLAYER_NAME}!`,
+  `Lucky lane for ${PLAYER_NAME}! 🍀`,
+  `Champion vibes, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME} saves the castle! 🏰`,
+  `Practice makes perfect, ${PLAYER_NAME}!`,
+  `Smooth roll, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME}'s got the magic touch! ✨`,
+  `The crowd loves ${PLAYER_NAME}! 📣`,
+  `Unicorn approved, ${PLAYER_NAME}! 🦄`,
+  `Turtle-y awesome, ${PLAYER_NAME}! 🐢`,
+  `Squirrel says WOW, ${PLAYER_NAME}! 🐿️`,
+  `${PLAYER_NAME} = awesome!`,
+  `Better every roll, ${PLAYER_NAME}!`,
+  `Don't stop now, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME}, captain of the castle!`,
+  `That's how it's done, ${PLAYER_NAME}!`,
+  `Strike time, ${PLAYER_NAME}!`,
+  `Fearless ${PLAYER_NAME}! 💪`,
+  `${PLAYER_NAME} is dazzling! 🌟`,
+  `Hooray for ${PLAYER_NAME}! 🎉`,
+  `Gold medal roll, ${PLAYER_NAME}! 🥇`,
+  `Epic, ${PLAYER_NAME}!`,
+  `${PLAYER_NAME} is a bowling boss!`,
+  `Keep shining, ${PLAYER_NAME}! ☀️`,
 ];
 
-const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)]!;
+export const STRIKE_PHRASES = [
+  `STRIKE KING ${PLAYER_NAME}! 👑`,
+  `All 10! Incredible!`,
+  `${PLAYER_NAME} knocked them ALL down!`,
+  `Pin party! 🎉`,
+  `Perfect hit!`,
+  `Legendary, ${PLAYER_NAME}!`,
+  `Boom! Strike!`,
+  `Unbelievable, ${PLAYER_NAME}!`,
+  `Total pin wipeout!`,
+  `The castle bows to ${PLAYER_NAME}!`,
+  `Kapow! 💥`,
+  `You're a strike machine, ${PLAYER_NAME}!`,
+];
+
+export const SPARE_PHRASES = [
+  `Clean up crew ${PLAYER_NAME}! 🧹`,
+  `Spare-tacular!`,
+  `No pin left behind, ${PLAYER_NAME}!`,
+  `Sweet spare!`,
+  `Smart shot, ${PLAYER_NAME}!`,
+  `Picked them all up!`,
+  `Spare-o-rama, ${PLAYER_NAME}!`,
+  `Nailed the spare!`,
+];
+
+export const MISS_PHRASES = [
+  `Shake it off, ${PLAYER_NAME}! You can do it!`,
+  `Next one's yours, ${PLAYER_NAME}!`,
+  `Even champions miss sometimes!`,
+  `Deep breath, ${PLAYER_NAME}, try again!`,
+  `Oops! Let's go again!`,
+  `You'll get them, ${PLAYER_NAME}!`,
+  `That was a practice roll!`,
+  `Keep trying, ${PLAYER_NAME}! 💪`,
+  `Aim for the middle, ${PLAYER_NAME}!`,
+  `Good try! Roll again!`,
+];
+
+export const BIG_HIT_PHRASES = [
+  `So close to a strike!`,
+  `Almost all of them!`,
+  `Huge hit!`,
+  `What a roll!`,
+  `Pins went flying!`,
+  `Massive!`,
+];
+
+export const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)]!;
 
 let styleAdded = false;
 function ensureStyle() {
@@ -48,19 +139,42 @@ function ensureStyle() {
   document.head.appendChild(st);
 }
 
-/** A cute phrase with the player's name floats across the sky. */
+/** Where phrases fly: the side gutters on wide screens, the sky above the lane on narrow ones. */
+export function phraseLane(w: number, h: number, rnd = Math.random): { side: "left" | "right" | "top"; topPct: number; bandPct: number } {
+  if (w > 900 && w / Math.max(1, h) > 1.3) {
+    return { side: rnd() < 0.5 ? "left" : "right", topPct: 16 + rnd() * 48, bandPct: 27 };
+  }
+  return { side: "top", topPct: 9 + rnd() * 10, bandPct: 100 };
+}
+
+/** A cute phrase with the player's name floats across the sky (or down the side bands on big screens). */
 export function floatPhrase(container: HTMLElement, text = pick(NAME_PHRASES)) {
   ensureStyle();
   const el = document.createElement("div");
-  const ltr = Math.random() < 0.5;
   const w = container.clientWidth || 800;
+  const h = container.clientHeight || 600;
+  const lane = phraseLane(w, h);
   el.textContent = text;
-  el.style.cssText =
-    `position:absolute;top:${16 + Math.random() * 20}%;${ltr ? "left:-10%" : "right:-10%"};` +
-    `font-family:${pick(FONTS)};font-size:clamp(22px,4.5vw,44px);color:${pick(COLORS)};` +
-    "white-space:nowrap;pointer-events:none;z-index:12;-webkit-text-stroke:1.5px #fff;" +
-    "text-shadow:0 3px 0 rgba(0,0,0,.18),0 0 14px rgba(255,255,255,.9);" +
-    `--dist:${(ltr ? 1 : -1) * w * 1.2}px;animation:rsbFloatAcross ${6 + Math.random() * 2}s ease-in-out forwards;`;
+  el.dataset.phraseSide = lane.side;
+  const base =
+    `font-family:${pick(FONTS)};color:${pick(COLORS)};pointer-events:none;z-index:12;-webkit-text-stroke:1.5px #fff;` +
+    "text-shadow:0 3px 0 rgba(0,0,0,.18),0 0 14px rgba(255,255,255,.9);";
+  if (lane.side === "top") {
+    const ltr = Math.random() < 0.5;
+    el.style.cssText =
+      `position:absolute;top:${lane.topPct}%;${ltr ? "left:-10%" : "right:-10%"};white-space:nowrap;` +
+      base + "font-size:clamp(22px,4.5vw,44px);" +
+      `--dist:${(ltr ? 1 : -1) * w * 1.2}px;animation:rsbFloatAcross ${6 + Math.random() * 2}s ease-in-out forwards;`;
+  } else {
+    // Fly in from the screen edge across the side band, stop short of the lane.
+    const band = (w * lane.bandPct) / 100;
+    const left = lane.side === "left";
+    el.style.cssText =
+      `position:absolute;top:${lane.topPct}%;${left ? "left" : "right"}:${-band * 0.55}px;width:${band * 0.85}px;` +
+      `text-align:center;white-space:normal;line-height:1.05;` +
+      base + "font-size:clamp(24px,2.7vw,50px);" +
+      `--dist:${(left ? 1 : -1) * band * 0.65}px;animation:rsbFloatAcross ${6 + Math.random() * 2}s ease-in-out forwards;`;
+  }
   container.appendChild(el);
   setTimeout(() => el.remove(), 8500);
 }
