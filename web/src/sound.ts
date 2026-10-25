@@ -23,7 +23,10 @@ export class SoundFX {
 
   private ensureCtx(): AudioContext | null {
     if (this.muted) return null;
-    if (this.ctx) return this.ctx;
+    if (this.ctx) {
+      if (this.ctx.state === "suspended") void this.ctx.resume();
+      return this.ctx;
+    }
     type Win = typeof window & { webkitAudioContext?: typeof AudioContext };
     const Ctor = window.AudioContext ?? (window as Win).webkitAudioContext;
     if (!Ctor) return null;
@@ -98,8 +101,72 @@ export class SoundFX {
     this.rollGain = null;
   }
 
-  // Ascending C-major arpeggio. Played once on STRIKE.
+  private tone(freq: number, start: number, dur: number, vol = 0.15, type: OscillatorType = "triangle") {
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    const t = ctx.currentTime + start;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(vol, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  }
+
+  // Bright "ding" per pin, pitched up the scale so a big hit sounds musical.
+  happy(index = 0) {
+    const scale = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.5, 1568, 1760];
+    this.tone(scale[index % scale.length]!, 0.02 + Math.random() * 0.05, 0.35, 0.09, "sine");
+  }
+
+  // Short happy jingle after any throw that knocks pins.
+  cheer() {
+    [659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, i * 0.1, 0.3, 0.12));
+  }
+
+  // Gentle "aww, try again" two notes.
+  encourage() {
+    this.tone(523.25, 0, 0.3, 0.1, "sine");
+    this.tone(659.25, 0.18, 0.4, 0.1, "sine");
+  }
+
+  // Boing when the ball bounces off a bumper.
+  bumper() {
+    const ctx = this.ensureCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    const t = ctx.currentTime;
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.exponentialRampToValueAtTime(660, t + 0.12);
+    osc.frequency.exponentialRampToValueAtTime(330, t + 0.3);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.4);
+  }
+
+  // Trumpet-style fanfare for a STRIKE.
   strike() {
+    const fan: [number, number, number][] = [
+      [523.25, 0, 0.18], [523.25, 0.18, 0.18], [523.25, 0.36, 0.18],
+      [698.46, 0.54, 0.5], [880, 1.0, 0.25], [783.99, 1.25, 0.2], [1046.5, 1.45, 0.9],
+    ];
+    for (const [f, t, d] of fan) {
+      this.tone(f, t, d, 0.12, "sawtooth");
+      this.tone(f * 2, t, d, 0.05, "triangle");
+    }
+    this.arp();
+  }
+
+  // Ascending C-major arpeggio sparkle.
+  private arp() {
     const ctx = this.ensureCtx();
     if (!ctx) return;
     const notes = [523.25, 659.25, 783.99, 1046.5];

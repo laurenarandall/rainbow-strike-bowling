@@ -54,7 +54,16 @@ const BALL_RADIUS = 0.35;
 const PIN_RADIUS = 0.15;
 const PIN_HEIGHT = 0.9;
 const BALL_SPEED = 25;
-const KNOCK_DISTANCE = 0.55;
+const KNOCK_DISTANCE = 0.6;
+// Easy mode: bigger hit zone when the power lands in the green sweet spot.
+const SWEET_KNOCK_DISTANCE = 0.75;
+const SWEET_MIN = 0.45;
+const SWEET_MAX = 0.8;
+const EASY_MODE = true;
+const BUMPERS = true;
+const RAINBOW = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff"];
+const PIN_COLORS = ["#ff3b3b", "#ff8c1a", "#ffd60a", "#3ddc4a", "#1fb6ff", "#4c5cff", "#b14cff", "#ff4fb8", "#00d1c1", "#ffffff"];
+const CHEERS = ["Great job!", "Awesome!", "Way to go!", "Super!", "Nice roll!", "You rock!", "Wow!"];
 const PIN_CHAIN_DISTANCE = PIN_SPACING * 1.2;
 const TOTAL_FRAMES = 10;
 
@@ -131,30 +140,19 @@ function createWoodTexture(scene: Scene): DynamicTexture {
   const size = 256;
   const tex = new DynamicTexture("laneTex", size, scene, true);
   const c = tex.getContext() as unknown as CanvasRenderingContext2D;
-
-  // Base wood color, slightly mottled by a vertical gradient
-  const grad = c.createLinearGradient(0, 0, size, 0);
-  grad.addColorStop(0, "#a07b48");
-  grad.addColorStop(0.5, "#b3884f");
-  grad.addColorStop(1, "#9d7644");
-  c.fillStyle = grad;
-  c.fillRect(0, 0, size, size);
-
-  // Plank seams (vertical dark lines across the lane width)
-  c.fillStyle = "rgba(20,10,0,0.55)";
-  for (let i = 1; i < 8; i++) {
-    const x = Math.round((i / 8) * size);
-    c.fillRect(x, 0, 1, size);
+  // Rainbow stripes running down the lane (one per color across the width).
+  const n = RAINBOW.length;
+  for (let i = 0; i < n; i++) {
+    c.fillStyle = RAINBOW[i]!;
+    c.fillRect(0, Math.floor((i / n) * size), size, Math.ceil(size / n) + 1);
   }
-
-  // Grain speckle: short dark streaks distributed along plank length
-  for (let i = 0; i < 4200; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    c.fillStyle = `rgba(40,20,5,${Math.random() * 0.18})`;
-    c.fillRect(x, y, 1, 1 + Math.random() * 3);
+  // Soft white seams + a little sparkle so it still reads as a lane.
+  c.fillStyle = "rgba(255,255,255,0.55)";
+  for (let i = 1; i < n; i++) c.fillRect(0, Math.round((i / n) * size) - 1, size, 2);
+  for (let i = 0; i < 900; i++) {
+    c.fillStyle = `rgba(255,255,255,${Math.random() * 0.25})`;
+    c.fillRect(Math.random() * size, Math.random() * size, 2 + Math.random() * 3, 1);
   }
-
   tex.update();
   return tex;
 }
@@ -162,7 +160,16 @@ function createWoodTexture(scene: Scene): DynamicTexture {
 export function Game({ onScore, onGameOver, onStats }: GameProps) {
   // Pulls from the SoundProvider that GameShell wraps around its children.
   // Gates the SoundFX class's playback so the topbar Mute button works.
-  const { muted } = useSound();
+  const { muted, toggle } = useSound();
+  // Kids want sound: turn it on once at startup (the speaker button still mutes).
+  const unmutedOnce = useRef(false);
+  useEffect(() => {
+    if (!unmutedOnce.current) {
+      unmutedOnce.current = true;
+      if (muted) toggle();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const sfxRef = useRef<SoundFX | null>(null);
@@ -189,7 +196,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     });
     engineRef.current = engine;
     const scene = new Scene(engine);
-    scene.clearColor = new Color4(0.06, 0.09, 0.16, 1);
+    scene.clearColor = new Color4(0.45, 0.75, 1, 1);
 
     // ---- Camera: fixed behind ball, no user rotation, never moves ----
     const camera = new FreeCamera("cam", new Vector3(0, 7, 13), scene);
@@ -198,7 +205,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     // ---- Lighting ----
     const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
-    hemi.intensity = 0.7;
+    hemi.intensity = 0.95;
     hemi.groundColor = new Color3(0.15, 0.12, 0.1);
 
     const dir = new DirectionalLight(
@@ -228,7 +235,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     floor.position.y = -0.15;
     floor.position.z = -LANE_LENGTH / 2 + 5;
     const floorMat = new StandardMaterial("floorMat", scene);
-    floorMat.diffuseColor = new Color3(0.12, 0.13, 0.18);
+    floorMat.diffuseColor = new Color3(0.35, 0.8, 0.4);
     floorMat.specularColor = new Color3(0.05, 0.05, 0.05);
     floor.material = floorMat;
     floor.receiveShadows = true;
@@ -244,7 +251,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const laneMat = new StandardMaterial("laneMat", scene);
     laneMat.diffuseTexture = createWoodTexture(scene);
     // V repeats along the lane length so plank seams look long & thin.
-    (laneMat.diffuseTexture as DynamicTexture).vScale = 6;
+    (laneMat.diffuseTexture as DynamicTexture).vScale = 1;
+    laneMat.emissiveColor = new Color3(0.15, 0.15, 0.15);
     laneMat.specularColor = new Color3(0.35, 0.3, 0.18);
     laneMat.specularPower = 96;
     lane.material = laneMat;
@@ -259,8 +267,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       );
       guide.position.set(i * 0.8, 0.01, 1);
       const gMat = new StandardMaterial(`gMat${i}`, scene);
-      gMat.diffuseColor = new Color3(0.55, 0.4, 0.25);
-      gMat.alpha = 0.5;
+      gMat.diffuseColor = new Color3(1, 1, 1);
+      gMat.alpha = 0.8;
       guide.material = gMat;
     }
 
@@ -279,6 +287,23 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       gutter.material = gutterMat;
     }
 
+    // ---- Bumpers: soft rainbow rails over the gutters ----
+    if (BUMPERS) {
+      for (const side of [-1, 1]) {
+        const bumper = MeshBuilder.CreateCylinder(
+          `bumper${side}`,
+          { height: LANE_LENGTH, diameter: 0.35, tessellation: 16 },
+          scene,
+        );
+        bumper.rotation.x = Math.PI / 2;
+        bumper.position.set(side * (LANE_WIDTH / 2 + 0.2), 0.2, -LANE_LENGTH / 2 + 5);
+        const bMat = new StandardMaterial(`bumperMat${side}`, scene);
+        bMat.diffuseColor = side < 0 ? new Color3(1, 0.3, 0.7) : new Color3(0.2, 0.7, 1);
+        bMat.emissiveColor = bMat.diffuseColor.scale(0.4);
+        bumper.material = bMat;
+      }
+    }
+
     // ---- Back wall ----
     const backWall = MeshBuilder.CreateBox(
       "backWall",
@@ -288,7 +313,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     backWall.position.z = PIN_Z_START - 3.5;
     backWall.position.y = 1;
     const wallMat = new StandardMaterial("wallMat", scene);
-    wallMat.diffuseColor = new Color3(0.2, 0.2, 0.25);
+    wallMat.diffuseColor = new Color3(0.6, 0.4, 0.9);
     backWall.material = wallMat;
 
     // ---- Pin materials ----
@@ -298,7 +323,17 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     pinMat.specularPower = 32;
 
     const pinRedMat = new StandardMaterial("pinRedMat", scene);
-    pinRedMat.diffuseColor = new Color3(0.85, 0.15, 0.15);
+    pinRedMat.diffuseColor = new Color3(1, 1, 1);
+    pinRedMat.emissiveColor = new Color3(0.3, 0.3, 0.3);
+    const pinMats = PIN_COLORS.map((hex, i) => {
+      const m = new StandardMaterial(`pinMat${i}`, scene);
+      m.diffuseColor = Color3.FromHexString(hex);
+      m.emissiveColor = Color3.FromHexString(hex).scale(0.25);
+      m.specularColor = new Color3(0.6, 0.6, 0.6);
+      m.specularPower = 32;
+      return m;
+    });
+    void pinMat;
 
     // ---- Create pins ----
     function createPins(): PinState[] {
@@ -317,7 +352,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         );
         pinBody.position = pos.clone();
         pinBody.position.y = PIN_HEIGHT / 2;
-        pinBody.material = pinMat;
+        pinBody.material = pinMats[i]!;
         shadowGen.addShadowCaster(pinBody, true);
 
         // Red stripe
@@ -370,7 +405,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       scene,
     );
     const ballMat = new StandardMaterial("ballMat", scene);
-    ballMat.diffuseColor = new Color3(0.15, 0.08, 0.55);
+    ballMat.diffuseColor = new Color3(0.95, 0.2, 0.6);
     ballMat.specularColor = new Color3(0.6, 0.6, 0.8);
     ballMat.specularPower = 64;
     ball.material = ballMat;
@@ -448,7 +483,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const phaseLabel = document.createElement("div");
     phaseLabel.style.cssText =
       "position:absolute;top:12px;left:50%;transform:translateX(-50%);" +
-      "font-family:Fraunces,serif;font-size:22px;font-weight:700;" +
+      "font-family:Fraunces,serif;font-size:30px;font-weight:800;" +
       "color:#fff;text-shadow:0 2px 8px rgba(0,0,0,0.7);text-align:center;" +
       "padding:6px 18px;border-radius:12px;background:rgba(0,0,0,0.35);" +
       "backdrop-filter:blur(4px);transition:opacity 0.3s;";
@@ -459,7 +494,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const instrLabel = document.createElement("div");
     instrLabel.style.cssText =
       "position:absolute;bottom:24px;left:50%;transform:translateX(-50%);" +
-      "font-family:Manrope,sans-serif;font-size:14px;font-weight:500;" +
+      "font-family:Manrope,sans-serif;font-size:18px;font-weight:700;" +
       "color:rgba(255,255,255,0.85);text-shadow:0 1px 4px rgba(0,0,0,0.6);" +
       "text-align:center;padding:8px 20px;border-radius:10px;" +
       "background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);" +
@@ -476,7 +511,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     const powerContainer = document.createElement("div");
     powerContainer.style.cssText =
-      "position:relative;width:28px;height:200px;border-radius:14px;" +
+      "position:relative;width:44px;height:260px;border-radius:22px;" +
       "overflow:hidden;background:rgba(0,0,0,0.4);" +
       "border:2px solid rgba(255,255,255,0.25);backdrop-filter:blur(4px);";
     powerWrap.appendChild(powerContainer);
@@ -486,11 +521,18 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       "position:absolute;bottom:0;left:0;width:100%;height:0%;" +
       "border-radius:0 0 12px 12px;transition:background 0.1s;";
     powerContainer.appendChild(powerFillDiv);
+    // Big green sweet spot band (easy mode).
+    const sweetDiv = document.createElement("div");
+    sweetDiv.style.cssText =
+      `position:absolute;left:0;width:100%;bottom:${SWEET_MIN * 100}%;height:${(SWEET_MAX - SWEET_MIN) * 100}%;` +
+      "background:rgba(34,197,94,0.45);border-top:3px solid #4ade80;border-bottom:3px solid #4ade80;" +
+      "box-shadow:0 0 16px #22c55e inset;";
+    if (EASY_MODE) powerContainer.appendChild(sweetDiv);
 
     const powerLabel = document.createElement("div");
     powerLabel.style.cssText =
-      "font-family:Manrope,sans-serif;font-size:11px;font-weight:600;" +
-      "color:rgba(255,255,255,0.7);white-space:nowrap;letter-spacing:0.05em;";
+      "font-family:Manrope,sans-serif;font-size:16px;font-weight:800;" +
+      "color:#fff;white-space:nowrap;letter-spacing:0.05em;text-shadow:0 2px 4px rgba(0,0,0,0.6);";
     powerLabel.textContent = "POWER";
     powerWrap.appendChild(powerLabel);
 
@@ -534,14 +576,24 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
     const bigLabel = document.createElement("div");
     bigLabel.style.cssText =
       "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) scale(0);" +
-      "font-family:Fraunces,serif;font-size:48px;font-weight:900;" +
-      "color:#ffd700;text-shadow:0 0 20px rgba(255,215,0,0.6),0 4px 12px rgba(0,0,0,0.5);" +
+      "font-family:Fraunces,serif;font-size:clamp(40px,9vw,84px);font-weight:900;" +
+      "color:#fff;text-align:center;line-height:1.05;white-space:nowrap;" +
+      "-webkit-text-stroke:2px #7c3aed;" +
+      "text-shadow:0 0 24px rgba(255,255,255,0.8),4px 4px 0 #ff3b3b,8px 8px 0 #ffd60a,12px 12px 0 #1fb6ff;" +
       "pointer-events:none;transition:transform 0.3s ease-out,opacity 0.5s;opacity:0;";
     hudDiv.appendChild(bigLabel);
 
     let bigLabelTimer: ReturnType<typeof setTimeout> | null = null;
-    function showBigLabel(text: string) {
+    function showBigLabel(text: string, sub = "", ms = 1600) {
       bigLabel.textContent = text;
+      if (sub) {
+        const subEl = document.createElement("div");
+        subEl.textContent = sub;
+        subEl.style.cssText =
+          "font-size:0.55em;margin-top:8px;-webkit-text-stroke:1px #7c3aed;" +
+          "text-shadow:3px 3px 0 #ff8c1a,6px 6px 0 #3ddc4a;";
+        bigLabel.appendChild(subEl);
+      }
       bigLabel.style.transform = "translate(-50%,-50%) scale(1)";
       bigLabel.style.opacity = "1";
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
@@ -549,7 +601,33 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         bigLabel.style.transform = "translate(-50%,-50%) scale(1.2)";
         bigLabel.style.opacity = "0";
         bigLabelTimer = null;
-      }, 800);
+      }, ms);
+    }
+
+    // Rainbow confetti burst (DOM, cheap and very colorful).
+    if (!document.getElementById("rsb-confetti-style")) {
+      const st = document.createElement("style");
+      st.id = "rsb-confetti-style";
+      st.textContent =
+        "@keyframes rsbConfetti{0%{transform:translate(0,0) rotate(0);opacity:1}" +
+        "100%{transform:translate(var(--dx),var(--dy)) rotate(var(--rot));opacity:0}}";
+      document.head.appendChild(st);
+    }
+    function confetti(count = 160) {
+      for (let i = 0; i < count; i++) {
+        const el = document.createElement("div");
+        const size = 8 + Math.random() * 10;
+        const ang = Math.random() * Math.PI * 2;
+        const dist = 150 + Math.random() * 450;
+        el.style.cssText =
+          `position:absolute;left:${30 + Math.random() * 40}%;top:${30 + Math.random() * 20}%;` +
+          `width:${size}px;height:${size * (Math.random() < 0.5 ? 0.5 : 1)}px;` +
+          `background:${RAINBOW[i % RAINBOW.length]};border-radius:${Math.random() < 0.4 ? "50%" : "2px"};` +
+          `--dx:${Math.cos(ang) * dist}px;--dy:${Math.sin(ang) * dist * 0.6 + 260}px;--rot:${Math.random() * 1080 - 540}deg;` +
+          `animation:rsbConfetti ${1.6 + Math.random() * 1.4}s cubic-bezier(.15,.7,.4,1) forwards;`;
+        hudDiv.appendChild(el);
+        setTimeout(() => el.remove(), 3200);
+      }
     }
 
     // Remove old 3D power bar meshes - we use DOM now
@@ -645,20 +723,20 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
 
     function updateHUD() {
       if (throwPhase === "aiming") {
-        phaseLabel.textContent = "AIM";
+        phaseLabel.textContent = "🎯 Aim!";
         phaseLabel.style.opacity = "1";
         if (showInstr) {
-          instrLabel.textContent = "Drag left/right or use arrow keys to aim. Tap / Space to set.";
+          instrLabel.textContent = "Slide left or right to aim, then tap!";
           instrLabel.style.opacity = "1";
         }
         powerWrap.style.display = "none";
         spinWrap.style.display = "none";
         trajectory.isVisible = true;
       } else if (throwPhase === "power") {
-        phaseLabel.textContent = "SET POWER";
+        phaseLabel.textContent = "💪 Tap in the green!";
         phaseLabel.style.opacity = "1";
         if (showInstr) {
-          instrLabel.textContent = "Tap / Space to lock power.";
+          instrLabel.textContent = "Tap when the bar is in the green!";
           instrLabel.style.opacity = "1";
         }
         powerWrap.style.display = "flex";
@@ -675,8 +753,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         spinWrap.style.display = "flex";
         trajectory.isVisible = true;
       } else if (throwPhase === "rolling") {
-        phaseLabel.textContent = "";
-        phaseLabel.style.opacity = "0";
+        if (!sweetThrow) {
+          phaseLabel.textContent = "";
+          phaseLabel.style.opacity = "0";
+        }
         instrLabel.style.opacity = "0";
         powerWrap.style.display = "none";
         spinWrap.style.display = "none";
@@ -773,7 +853,13 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       updateHUD();
     }
 
+    let sweetThrow = false;
     function throwBall() {
+      sweetThrow = EASY_MODE && power >= SWEET_MIN && power <= SWEET_MAX;
+      if (sweetThrow) {
+        phaseLabel.textContent = "⭐ Perfect power!";
+        phaseLabel.style.opacity = "1";
+      }
       throwPhase = "rolling";
       ballX = aimX;
       ballZ = ballStartZ;
@@ -809,14 +895,21 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       const totalDown = frame.throws.reduce((a, b) => a + b, 0);
       const isSpare = currentThrow === 1 && totalDown >= 10;
 
+      const cheer = CHEERS[Math.floor(Math.random() * CHEERS.length)]!;
       if (isStrike) {
-        showBigLabel("STRIKE!");
+        showBigLabel("🌈 STRIKE! 🌈", "All 10 pins! Amazing!", 2200);
         sfx.strike();
+        confetti(200);
       } else if (isSpare) {
-        showBigLabel("SPARE!");
+        showBigLabel("✨ SPARE! ✨", `You got them all! ${cheer}`, 2000);
         sfx.spare();
-      } else if (newlyKnocked === 0 && guttered) {
-        showBigLabel("GUTTER");
+        confetti(90);
+      } else if (newlyKnocked === 0) {
+        showBigLabel("So close!", "Try again! You can do it!");
+        sfx.encourage();
+      } else {
+        showBigLabel(`${newlyKnocked} pin${newlyKnocked === 1 ? "" : "s"}!`, cheer);
+        sfx.cheer();
       }
 
       if (currentFrame < 9) {
@@ -872,7 +965,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         if (throwPhase === "aiming") {
           startPower();
         } else if (throwPhase === "power") {
-          startSpin();
+          if (EASY_MODE) throwBall();
+          else startSpin();
         } else if (throwPhase === "spin") {
           throwBall();
         }
@@ -895,7 +989,8 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         pointerStartX = e.clientX;
         aimXAtPointerStart = aimX;
       } else if (throwPhase === "power") {
-        startSpin();
+        if (EASY_MODE) throwBall();
+        else startSpin();
       } else if (throwPhase === "spin") {
         pointerDown = true;
         pointerStartX = e.clientX;
@@ -982,7 +1077,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
       }
 
       if (throwPhase === "power") {
-        power += powerDir * 1.2 * dt;
+        power += powerDir * (EASY_MODE ? 0.55 : 1.2) * dt;
         if (power >= 1) {
           power = 1;
           powerDir = -1;
@@ -996,10 +1091,10 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         powerFillDiv.style.height = `${pct}%`;
 
         // Color: green -> yellow -> red
-        const r = Math.round(power < 0.5 ? 50 + power * 360 : 230);
-        const g = Math.round(power < 0.5 ? 200 : 200 - (power - 0.5) * 360);
-        const b = 50;
-        powerFillDiv.style.background = `rgb(${r},${g},${b})`;
+        const inSweet = power >= SWEET_MIN && power <= SWEET_MAX;
+        powerFillDiv.style.background = inSweet
+          ? "linear-gradient(#86efac,#16a34a)"
+          : "linear-gradient(#ff8c1a,#ff3b3b)";
       }
 
       if (throwPhase === "rolling") {
@@ -1008,12 +1103,19 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
         // Spin accumulates lateral velocity over time. The ball starts
         // straight (ballVx = 0 at throwBall) and curves more the longer it
         // rolls — like a real hook ball. Sign matches simulateTrajectory.
-        if (!guttered) ballVx -= spin * CURVE_RATE * dt;
+        if (!guttered && !EASY_MODE) ballVx -= spin * CURVE_RATE * dt;
         ballX += ballVx * dt;
 
         // Gutter: once the ball reaches the lane edge it falls into the
         // gutter, glides forward there, and skips the pin collision check.
-        if (!guttered && Math.abs(ballX) > GUTTER_EDGE) {
+        if (BUMPERS && Math.abs(ballX) > GUTTER_EDGE) {
+          // Bounce off the bumper back toward the middle of the lane.
+          const side = Math.sign(ballX);
+          ballX = side * GUTTER_EDGE;
+          ballVx = -side * Math.max(Math.abs(ballVx) * 0.6, 1.2);
+          sfx.bumper();
+        }
+        if (!BUMPERS && !guttered && Math.abs(ballX) > GUTTER_EDGE) {
           guttered = true;
           ballVx = 0;
           sfx.gutter();
@@ -1039,7 +1141,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
           const dx = ballX - p.originalPos.x;
           const dz = ballZ - p.originalPos.z;
           const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < KNOCK_DISTANCE) {
+          if (dist < (sweetThrow ? SWEET_KNOCK_DISTANCE : KNOCK_DISTANCE)) {
             const fallDirX = dx !== 0 ? -dx : Math.random() - 0.5;
             const fallDirZ = dz !== 0 ? -dz : -1;
             setPinFall(p, fallDirZ, -fallDirX);
@@ -1047,6 +1149,7 @@ export function Game({ onScore, onGameOver, onStats }: GameProps) {
             // Loud thud on the ball's direct hit; the cascade pins get
             // softer clatter slightly later.
             sfx.pinHit(hitAny ? 0.6 : 1);
+            sfx.happy(i);
             hitAny = true;
 
             // Chain reaction: knock nearby standing pins
