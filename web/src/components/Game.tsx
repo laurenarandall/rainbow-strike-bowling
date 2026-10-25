@@ -20,6 +20,13 @@ import { DynamicTexture } from "@babylonjs/core/Materials/Textures/dynamicTextur
 import { SoundFX } from "../sound";
 import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
+import HavokPhysics from "@babylonjs/havok";
+import havokWasmUrl from "@babylonjs/havok/lib/esm/HavokPhysics.wasm?url";
+import { HavokPlugin } from "@babylonjs/core/Physics/v2/Plugins/havokPlugin";
+import { PhysicsBody } from "@babylonjs/core/Physics/v2/physicsBody";
+import { PhysicsShapeBox, PhysicsShapeSphere, PhysicsShapeContainer } from "@babylonjs/core/Physics/v2/physicsShape";
+import { PhysicsMotionType } from "@babylonjs/core/Physics/v2/IPhysicsEnginePlugin";
+import "@babylonjs/core/Physics/v2/physicsEngineComponent";
 import type { Character } from "../characters";
 import { CHARACTERS } from "../characters";
 import { PLAYER_NAME, NAME_PHRASES, floatPhrase, animalDisco, fireworks } from "../fx";
@@ -112,6 +119,8 @@ interface PinState {
   vz: number;
   offX: number;
   offZ: number;
+  // Real rigid body when Havok physics is running (null in fallback mode).
+  body: PhysicsBody | null;
 }
 
 interface FrameScore {
@@ -466,6 +475,115 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
     });
     void pinMat;
 
+    // ---- Real physics (Havok) ----
+    // Loaded async; until it is ready (or if it fails) the old arcade
+    // simulation keeps the game playable.
+    let physOn = false;
+    let physPending = false;
+    let disposed = false;
+    let ballBody: PhysicsBody | null = null;
+    let bumperBodies: PhysicsBody[] = [];
+    let lastHitSfx = 0;
+    let physRollTime = 0;
+    let firstCrash = false;
+    let shake = 0;
+    let camT = 0;
+    const camTarget = new Vector3(0, 0, -10);
+    const PIN_MASS = 1.5;
+    const BALL_MASS = 7;
+    function makeStatic(name: string, w: number, h: number, d: number, x: number, y: number, z: number, restitution = 0.2, friction = 0.5): PhysicsBody {
+      const m = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, scene);
+      m.position.set(x, y, z);
+      m.isVisible = false;
+      m.isPickable = false;
+      const body = new PhysicsBody(m, PhysicsMotionType.STATIC, false, scene);
+      const shape = new PhysicsShapeBox(Vector3.Zero(), Quaternion.Identity(), new Vector3(w, h, d), scene);
+      shape.material = { friction, restitution };
+      body.shape = shape;
+      return body;
+    }
+    function disposeBody(b: PhysicsBody | null) {
+      if (!b) return;
+      b.shape?.dispose();
+      b.dispose();
+    }
+    function onCrash(ev: { impulse: number }) {
+      const now = performance.now();
+      const imp = ev.impulse || 0;
+      if (imp < 0.6 || now - lastHitSfx < 35) return;
+      lastHitSfx = now;
+      sfx.pinHit(Math.min(1, imp / 12));
+      if (!firstCrash && imp > 4 && throwPhase === "rolling") {
+        firstCrash = true;
+        shake = 0.35;
+      }
+    }
+    function addPinBody(p: PinState) {
+      if (!physOn || p.body) return;
+      const BH = PIN_HEIGHT / 3;
+      p.mesh.rotationQuaternion = p.mesh.rotationQuaternion ?? Quaternion.Identity();
+      const c = new PhysicsShapeContainer(scene);
+      c.addChild(new PhysicsShapeBox(Vector3.Zero(), Quaternion.Identity(), new Vector3(0.43, BH, 0.43), scene), new Vector3(0, -BH, 0));
+      c.addChild(new PhysicsShapeBox(Vector3.Zero(), Quaternion.Identity(), new Vector3(0.36, BH, 0.36), scene), new Vector3(0, 0, 0));
+      c.addChild(new PhysicsShapeBox(Vector3.Zero(), Quaternion.Identity(), new Vector3(0.29, BH + 0.07, 0.29), scene), new Vector3(0, BH + 0.035, 0));
+      c.material = { friction: 0.7, restitution: 0.4 };
+      const body = new PhysicsBody(p.mesh, PhysicsMotionType.DYNAMIC, false, scene);
+      body.shape = c;
+      body.setMassProperties({ mass: PIN_MASS, centerOfMass: new Vector3(0, 0.12, 0) });
+      body.setAngularDamping(0.25);
+      body.setLinearDamping(0.15);
+      body.setCollisionCallbackEnabled(true);
+      body.getCollisionObservable().add(onCrash);
+      p.body = body;
+    }
+    function removePinBody(p: PinState) {
+      disposeBody(p.body);
+      p.body = null;
+    }
+    function updateBumperBodies() {
+      for (const b of bumperBodies) {
+        const m = b.transformNode;
+        disposeBody(b);
+        m.dispose();
+      }
+      bumperBodies = [];
+      if (!physOn || !bumpersRef.current) return;
+      for (const side of [-1, 1]) {
+        bumperBodies.push(makeStatic(`bumperBody${side}`, 0.24, 0.7, LANE_LENGTH, side * (LANE_WIDTH / 2 + 0.12), 0.3, -LANE_LENGTH / 2 + 5, 0.55, 0.2));
+      }
+    }
+    function activatePhysics() {
+      physOn = true;
+      physPending = false;
+      for (const p of pins) if (!p.knocked && p.mesh.isEnabled()) addPinBody(p);
+      updateBumperBodies();
+    }
+    HavokPhysics({ locateFile: () => havokWasmUrl })
+      .then((hk) => {
+        if (disposed) return;
+        const plugin = new HavokPlugin(true, hk);
+        // The world is ~2.7x real scale, so gravity is scaled to keep pins
+        // falling at a believable speed.
+        scene.enablePhysics(new Vector3(0, -9.81 * 2.6, 0), plugin);
+        scene.getPhysicsEngine()?.setSubTimeStep(4);
+        const LZ = -LANE_LENGTH / 2 + 5;
+        // Gutter/floor level, the lane, the pin deck and the pit.
+        makeStatic("physFloor", 40, 0.2, 60, 0, -0.25, LZ, 0.1, 0.6);
+        makeStatic("physLane", LANE_WIDTH, 0.2, LANE_LENGTH, 0, -0.1, LZ, 0.05, 0.25);
+        makeStatic("physDeck", LANE_WIDTH, 0.2, 2.2, 0, -0.1, PIN_Z_START - 2.5, 0.05, 0.5);
+        // Gutter outer walls and pin-deck side walls (kickbacks!).
+        for (const side of [-1, 1]) {
+          makeStatic(`physGutterWall${side}`, 0.3, 0.8, LANE_LENGTH + 4, side * (LANE_WIDTH / 2 + 0.65), 0.2, LZ - 2, 0.3, 0.3);
+          makeStatic(`physKick${side}`, 0.3, 3, 7, side * (LANE_WIDTH / 2 + 0.55), 1.3, PIN_Z_START - 1.8, 0.5, 0.3);
+        }
+        makeStatic("physBack", LANE_WIDTH + 2, 4, 0.4, 0, 1.8, PIN_Z_START - 3.5, 0.15, 0.6);
+        if (throwPhase === "rolling" || throwPhase === "settling" || throwPhase === "done") physPending = true;
+        else activatePhysics();
+      })
+      .catch((e) => {
+        console.warn("Havok physics unavailable, using arcade physics", e);
+      });
+
     // ---- Create pins ----
     function createPins(): PinState[] {
       const pins: PinState[] = [];
@@ -520,8 +638,10 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
           vz: 0,
           offX: 0,
           offZ: 0,
+          body: null,
         });
       }
+      if (physOn) for (const p of pins) addPinBody(p);
       return pins;
     }
 
@@ -961,6 +1081,9 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
       ballZ = ballStartZ;
       ballX = 0;
       ballVx = 0;
+      disposeBody(ballBody);
+      ballBody = null;
+      ball.rotationQuaternion = null;
       ball.position.set(0, BALL_RADIUS, ballStartZ);
       ball.rotation.set(0, 0, 0);
       ball.setEnabled(true);
@@ -968,6 +1091,7 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
 
     function resetAllPins() {
       for (const p of pins) {
+        removePinBody(p);
         p.mesh.dispose();
       }
       pins = createPins();
@@ -977,7 +1101,15 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
     function resetStandingPins() {
       for (let i = 0; i < pins.length; i++) {
         const p = pins[i]!;
-        if (!p.knocked) {
+        if (!p.knocked && physOn) {
+          // Stand it back up where it slid to, with a fresh body.
+          const x = p.mesh.position.x;
+          const z = p.mesh.position.z;
+          removePinBody(p);
+          p.mesh.rotationQuaternion = Quaternion.Identity();
+          p.mesh.position.set(x, PIN_HEIGHT / 2, z);
+          addPinBody(p);
+        } else if (!p.knocked) {
           p.mesh.rotationQuaternion = null;
           p.mesh.rotation.set(0, 0, 0);
           p.mesh.position.set(p.originalPos.x, PIN_HEIGHT / 2, p.originalPos.z);
@@ -990,6 +1122,7 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
     function hideKnockedPins() {
       for (const p of pins) {
         if (p.knocked) {
+          removePinBody(p);
           p.mesh.setEnabled(false);
         }
       }
@@ -998,6 +1131,7 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
     // Set up the next throw. resetAll=true for a fresh rack (strike, new
     // frame, bonus throw); false to keep already-knocked pins down.
     function nextThrow(resetAll: boolean) {
+      if (physPending) activatePhysics();
       if (resetAll) resetAllPins();
       else {
         hideKnockedPins();
@@ -1025,6 +1159,7 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
     function startAiming() {
       throwPhase = "aiming";
       for (const b of bumperMeshes) b.setEnabled(bumpersRef.current);
+      updateBumperBodies();
       aimX = 0;
       power = 0;
       powerDir = 1;
@@ -1075,6 +1210,20 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
       ball.position.x = ballX;
       ball.position.z = ballZ;
       ball.position.y = BALL_RADIUS;
+      if (physOn) {
+        disposeBody(ballBody);
+        ball.rotationQuaternion = Quaternion.Identity();
+        const bb = new PhysicsBody(ball, PhysicsMotionType.DYNAMIC, false, scene);
+        const shape = new PhysicsShapeSphere(Vector3.Zero(), BALL_RADIUS, scene);
+        shape.material = { friction: 0.2, restitution: 0.1 };
+        bb.shape = shape;
+        bb.setMassProperties({ mass: BALL_MASS });
+        bb.setLinearVelocity(new Vector3(0, 0, -ballSpeed));
+        bb.setAngularVelocity(new Vector3(-ballSpeed / BALL_RADIUS, 0, 0));
+        ballBody = bb;
+        physRollTime = 0;
+        firstCrash = false;
+      }
       sfx.startRoll();
 
       // Fade out instructions after first throw
@@ -1278,6 +1427,14 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
       showBigLabel("🌈 STRIKE! 🌈", characterRef.current.strikeCheer, 4000);
     };
 
+    (window as unknown as { __rsbDebug?: () => unknown }).__rsbDebug = () => ({
+      physOn,
+      phase: throwPhase,
+      ball: ball.position.asArray().map((n) => +n.toFixed(2)),
+      ballBody: !!ballBody,
+      pins: pins.map((p) => ({ b: !!p.body, k: p.knocked, y: +p.mesh.position.y.toFixed(2), z: +p.mesh.position.z.toFixed(2) })),
+    });
+
     // ---- Main loop ----
     startAiming();
 
@@ -1345,7 +1502,56 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
           : "linear-gradient(#ff8c1a,#ff3b3b)";
       }
 
-      if (throwPhase === "rolling") {
+      if (throwPhase === "rolling" && physOn && ballBody) {
+        physRollTime += dt;
+        ballX = ball.position.x;
+        ballZ = ball.position.z;
+        const v = ballBody.getLinearVelocity();
+        if (!guttered && ballZ > PIN_Z_START + 0.45 && ball.position.y > BALL_RADIUS * 0.6) {
+          // Oiled lane: keep forward speed, add hook + drift sideways.
+          let ax = driftAcc;
+          if (ballZ < HOOK_START_Z) ax += HOOK_ACCEL;
+          if (!EASY_MODE) ax -= spin * CURVE_RATE;
+          v.x += ax * dt;
+          v.z = -ballSpeed;
+          ballBody.setLinearVelocity(v);
+        }
+        if (!bumpersRef.current && !guttered && Math.abs(ballX) > LANE_WIDTH / 2 + 0.05) {
+          guttered = true;
+          sfx.gutter();
+        }
+        if (ballZ < PIN_Z_START - 1.6 || physRollTime > 5 || (ballZ < PIN_Z_START + 1 && v.z > 0.5) || (physRollTime > 1 && v.length() < 0.8)) {
+          throwPhase = "settling";
+          settleTimer = 0;
+          sfx.stopRoll();
+          updateHUD();
+        }
+      } else if (throwPhase === "settling" && physOn) {
+        settleTimer += dt;
+        let moving = false;
+        for (const p of pins) {
+          if (p.body && p.body.getLinearVelocity().length() > 0.25) moving = true;
+        }
+        if (settleTimer > 0.6 && ball.isEnabled()) {
+          disposeBody(ballBody);
+          ballBody = null;
+          ball.setEnabled(false);
+        }
+        if ((settleTimer > 1.4 && !moving) || settleTimer > 3.8) {
+          // Count fallen pins by tilt (or if they flew off the deck).
+          for (let i = 0; i < pins.length; i++) {
+            const p = pins[i]!;
+            if (p.knocked || !standingBeforeThrow[i]) continue;
+            const q = p.mesh.rotationQuaternion;
+            const upY = q ? 1 - 2 * (q.x * q.x + q.z * q.z) : 1;
+            if (upY < 0.85 || p.mesh.position.y < PIN_HEIGHT / 2 - 0.2 || Math.abs(p.mesh.position.x) > LANE_WIDTH / 2 + 0.1 || p.mesh.position.z < PIN_Z_START - 3.2) {
+              p.knocked = true;
+            }
+          }
+          throwPhase = "done";
+          handleThrowComplete();
+        }
+      } else if (throwPhase === "rolling") {
         const speed = ballSpeed;
         ballZ -= speed * dt;
         if (!guttered) {
@@ -1414,7 +1620,7 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
         }
       }
 
-      if (throwPhase === "settling") {
+      if (throwPhase === "settling" && !physOn) {
         settleTimer += dt;
         if (settleTimer > 1.4) {
           throwPhase = "done";
@@ -1430,7 +1636,23 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
       }
 
       // Knocked pins slide, tip over and can bump into other pins.
-      for (let i = 0; i < pins.length; i++) {
+      // Crash cam: swoop toward the pins as the ball arrives, then back.
+      {
+        const want = physOn && ((throwPhase === "rolling" && ballZ < -5) || throwPhase === "settling") ? 1 : 0;
+        const prev = camT;
+        camT += (want - camT) * Math.min(1, dt * (want ? 2.2 : 3.5));
+        if (Math.abs(camT - want) < 0.002) camT = want;
+        shake = Math.max(0, shake - dt);
+        if (camT !== prev || shake > 0 || camT > 0) {
+          const e = camT * camT * (3 - 2 * camT);
+          const sx = shake > 0 ? (Math.random() - 0.5) * shake * 0.6 : 0;
+          const sy = shake > 0 ? (Math.random() - 0.5) * shake * 0.4 : 0;
+          camera.position.set(sx, 6.5 + (3.9 - 6.5) * e + sy, 13.5 + (-9 - 13.5) * e);
+          camTarget.set(0, 0.5 * e, -10 + (-19.6 + 10) * e);
+          camera.setTarget(camTarget);
+        }
+      }
+      if (!physOn) for (let i = 0; i < pins.length; i++) {
         const p = pins[i]!;
         if (!p.knocked) continue;
         if (p.knockDelay > 0) {
@@ -1520,6 +1742,7 @@ export function Game({ onScore, onGameOver, onStats, character, bumpers = false,
       window.removeEventListener("resize", onResize);
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
       clearInterval(phraseTimer);
+      disposed = true;
       sfx.dispose();
       // Clean up HUD
       hudDiv.remove();
