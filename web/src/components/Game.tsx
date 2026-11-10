@@ -1,4 +1,5 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
+import { runningTotals } from "../scoreMarks";
 import { useSound } from "@freegamestore/games";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { Scene } from "@babylonjs/core/scene";
@@ -36,6 +37,19 @@ export interface FrameStars {
   strike: boolean;
   spare: boolean;
   done: boolean;
+  throws: number[];
+  total: number | null;
+}
+
+/** Game progress carried over when the world is swapped mid-game. */
+interface GameSnapshot {
+  frames: { throws: number[]; pinsDown: number[] }[];
+  currentFrame: number;
+  currentThrow: number;
+  standing: boolean[];
+  pins: { off: boolean; knocked: boolean; pos: [number, number, number]; quat: [number, number, number, number] | null }[];
+  aimX: number;
+  bumpers: boolean;
 }
 
 export function starsForFrame(throws: number[]): number {
@@ -164,6 +178,21 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Live world switching: the scene is rebuilt (old one fully disposed) and
+  // the game picks up exactly where it was. Only between throws.
+  const [build, setBuild] = useState(0);
+  const snapRef = useRef<GameSnapshot | null>(null);
+  const idleRef = useRef<() => boolean>(() => true);
+  const pendingRebuild = useRef(false);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+  const firstLook = useRef(true);
+  const lookKey = `${theme}|${laneMode}|${ballSkin?.id ?? ""}|${pinStyle}`;
+  useEffect(() => {
+    if (firstLook.current) { firstLook.current = false; return; }
+    if (idleRef.current()) setBuild((b) => b + 1);
+    else pendingRebuild.current = true;
+  }, [lookKey]);
   const engineRef = useRef<Engine | null>(null);
   const sfxRef = useRef<SoundFX | null>(null);
   const onScoreRef = useRef(onScore);
@@ -582,6 +611,7 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
 
     const sfx = new SoundFX();
     sfxRef.current = sfx;
+    sfx.setMuted(mutedRef.current);
 
     function throwSpeed(p: number) {
       return (27 + p * 16) * (1 + (12 - feel.pounds) * 0.012);
@@ -690,12 +720,15 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
     }
 
     function emitStats() {
+      const totals = runningTotals(frames.map((f) => f.throws));
       const fs: FrameStars[] = frames.map((f, idx) => ({
         pins: Math.min(10, (f.throws[0] ?? 0) + (f.throws[1] ?? 0)),
         stars: starsForFrame(f.throws),
         strike: f.throws[0] === 10,
         spare: f.throws[0] !== 10 && (f.throws[0] ?? 0) + (f.throws[1] ?? 0) >= 10,
         done: idx < currentFrame || f.throws.length >= 2 || f.throws[0] === 10,
+        throws: [...f.throws],
+        total: totals[idx] ?? null,
       }));
       onStatsRef.current?.({ frame: Math.min(currentFrame + 1, 10), frames: fs });
     }
@@ -707,6 +740,10 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
 
     function startAiming() {
       throwPhase = "aiming";
+      if (pendingRebuild.current) {
+        pendingRebuild.current = false;
+        setTimeout(() => setBuild((b) => b + 1), 0);
+      }
       for (const b of bumperMeshes) b.setEnabled(bumpersRef.current);
       updateBumperBodies();
       aimAngle = 0;
@@ -895,6 +932,8 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Keys pressed on the world/scoreboard menus are for the menus.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-rsb-ui]")) return;
       if (e.key === " " || e.key === "Enter") {
         e.preventDefault();
         advance();
@@ -1012,8 +1051,49 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       pins: pins.map((p) => ({ b: !!p.body, k: p.knocked, y: +p.mesh.position.y.toFixed(2), z: +p.mesh.position.z.toFixed(2) })),
     });
 
+    idleRef.current = () => throwPhase === "aiming" || throwPhase === "power" || throwPhase === "spin";
+    const snap = snapRef.current;
+    snapRef.current = null;
+    if (snap) {
+      snap.frames.forEach((f, i) => { frames[i]!.throws = [...f.throws]; frames[i]!.pinsDown = [...f.pinsDown]; });
+      currentFrame = snap.currentFrame;
+      currentThrow = snap.currentThrow;
+      standingBeforeThrow = [...snap.standing];
+      aimX = snap.aimX;
+      showInstr = false;
+      instrLabel.style.opacity = "0";
+      snap.pins.forEach((ps, i) => {
+        const p = pins[i];
+        if (!p) return;
+        p.knocked = ps.knocked;
+        if (ps.off) { p.mesh.setEnabled(false); return; }
+        p.mesh.position.set(ps.pos[0], ps.pos[1], ps.pos[2]);
+        if (ps.quat) p.mesh.rotationQuaternion = new Quaternion(ps.quat[0], ps.quat[1], ps.quat[2], ps.quat[3]);
+      });
+    }
+    // Snapshot of the game for a world switch (taken on teardown).
+    function takeSnapshot(): GameSnapshot | null {
+      if (!idleRef.current() || currentFrame >= TOTAL_FRAMES) return null;
+      return {
+        frames: frames.map((f) => ({ throws: [...f.throws], pinsDown: [...f.pinsDown] })),
+        currentFrame, currentThrow, standing: [...standingBeforeThrow], aimX, bumpers: bumpersRef.current,
+        pins: pins.map((p) => {
+          const q = p.mesh.rotationQuaternion;
+          return {
+            off: !p.mesh.isEnabled(), knocked: p.knocked,
+            pos: [p.mesh.position.x, p.mesh.position.y, p.mesh.position.z],
+            quat: q ? [q.x, q.y, q.z, q.w] : null,
+          };
+        }),
+      };
+    }
+
     // ---- Main loop ----
     startAiming();
+    if (snap) {
+      updateScore();
+      emitStats();
+    }
     const tmpV = { x: 0, y: 0, z: 0 };
     const tmpW = { x: 0, y: 0, z: 0 };
     const vIn = new Vector3();
@@ -1307,7 +1387,7 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
     const phraseTimer = setInterval(() => {
       if (throwPhase === "aiming" || throwPhase === "power") floatPhrase(hudDiv);
     }, 9000);
-    setTimeout(() => floatPhrase(hudDiv, `Go, ${PLAYER_NAME}!`), 1200);
+    const hello = setTimeout(() => floatPhrase(hudDiv, snap ? `Welcome to ${getTheme(themeRef.current).name}, ${PLAYER_NAME}!` : `Go, ${PLAYER_NAME}!`), snap ? 300 : 1200);
 
     engine.runRenderLoop(() => scene.render());
     const onResize = () => engine.resize();
@@ -1321,6 +1401,9 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       window.removeEventListener("resize", onResize);
       if (bigLabelTimer !== null) clearTimeout(bigLabelTimer);
       clearInterval(phraseTimer);
+      clearTimeout(hello);
+      snapRef.current = takeSnapshot();
+      idleRef.current = () => false;
       disposed = true;
       sfx.dispose();
       // Clean up HUD
@@ -1329,7 +1412,7 @@ export function Game({ onScore, onGameOver, onStats, character, ballSkin, pinSty
       engine.dispose();
       engineRef.current = null;
     };
-  }, []);
+  }, [build]);
 
   return (
     <canvas

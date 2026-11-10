@@ -13,6 +13,11 @@ import { PIN_STYLES, loadPinStyleId, savePinStyleId } from "./gear";
 import { THEMES, getTheme, loadThemeId, saveThemeId, loadLaneMode, saveLaneMode } from "./themes";
 import type { ThemeId, LaneMode } from "./themes";
 import type { PinStyleId } from "./gear";
+import { Scoreboard } from "./components/Scoreboard";
+import { WorldTools } from "./components/WorldTools";
+import type { ToolMenu } from "./components/WorldTools";
+import { getBoardStyle, loadBoardStyle, saveBoardStyle, loadBoardAlpha, saveBoardAlpha } from "./boardStyles";
+import type { BoardStyleId } from "./boardStyles";
 import type { GamePhase } from "./types";
 
 const BEST_SCORE_KEY = "rainbow-strike-bowling-best";
@@ -103,63 +108,6 @@ function trySetBestScore(value: number) {
   } catch {
     // ignore
   }
-}
-
-function StarRow({ n, size = 14 }: { n: number; size?: number }) {
-  return (
-    <span style={{ fontSize: size, letterSpacing: -1, whiteSpace: "nowrap" }}>
-      {[0, 1, 2].map((i) => (
-        <span key={i} style={{ opacity: i < n ? 1 : 0.2, filter: i < n ? "none" : "grayscale(1)" }}>
-          ⭐
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function StarBoard({ frames, current }: { frames: FrameStars[]; current: number }) {
-  const total = frames.reduce((a, f) => a + (f.done || f.pins > 0 ? f.stars : 0), 0);
-  return (
-    <div
-      data-testid="starboard"
-      style={{
-        position: "absolute", left: "50%", top: 8, transform: "translateX(-50%)", zIndex: 20,
-        display: "flex", gap: 4, alignItems: "stretch", padding: 6, borderRadius: 16,
-        background: "rgba(255,255,255,0.85)", boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
-        pointerEvents: "none", maxWidth: "98vw",
-      }}
-    >
-      {Array.from({ length: 10 }, (_, i) => {
-        const f = frames[i];
-        const active = i === current - 1;
-        const shown = !!f && (f.done || f.pins > 0);
-        return (
-          <div
-            key={i}
-            style={{
-              minWidth: 0, width: "clamp(26px,7vw,52px)", borderRadius: 10, padding: "2px 2px",
-              textAlign: "center", fontFamily: "Manrope,sans-serif", fontWeight: 800, fontSize: 11,
-              color: "#4c1d95", position: "relative",
-              background: active ? "#fef08a" : "#f5f3ff",
-              border: active ? "2px solid #f59e0b" : "2px solid #ddd6fe",
-            }}
-          >
-            <div style={{ height: 16, fontSize: 14 }}>{shown && f.strike ? "👑" : i + 1}</div>
-            <StarRow n={shown ? f.stars : 0} size={10} />
-          </div>
-        );
-      })}
-      <div
-        style={{
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          padding: "0 8px", borderRadius: 10, background: "#fde68a", fontFamily: "Fraunces,serif",
-          fontWeight: 900, color: "#92400e", fontSize: 18, whiteSpace: "nowrap",
-        }}
-      >
-        ⭐ {total}
-      </div>
-    </div>
-  );
 }
 
 /** CSS look of a ball in the picker (matches the 3D finish). */
@@ -401,6 +349,27 @@ export default function App() {
     if (b) setBall(b);
     setPinStyle(def.pins);
   }, [setBall, setPinStyle]);
+  const [board, setBoardState] = useState<BoardStyleId>(() => {
+    const q = new URLSearchParams(window.location.search).get("board");
+    return q ? getBoardStyle(q).id : loadBoardStyle();
+  });
+  const setBoard = useCallback((b: BoardStyleId) => { setBoardState(b); saveBoardStyle(b); }, []);
+  const [boardAlpha, setBoardAlphaState] = useState<number>(loadBoardAlpha);
+  const setBoardAlpha = useCallback((a: number) => { setBoardAlphaState(a); saveBoardAlpha(a); }, []);
+  const [toolMenu, setToolMenu] = useState<ToolMenu>(() => {
+    const q = new URLSearchParams(window.location.search).get("menu");
+    return q === "world" || q === "board" ? q : null;
+  });
+  // Screenshot/test hooks.
+  useEffect(() => {
+    const w = window as unknown as { __rsbUI?: unknown };
+    w.__rsbUI = {
+      setTheme: (t: ThemeId) => setTheme(t),
+      setBoard: (b: BoardStyleId) => setBoard(getBoardStyle(b).id),
+      setAlpha: (a: number) => setBoardAlpha(a),
+      menu: (m: ToolMenu) => setToolMenu(m),
+    };
+  }, [setTheme, setBoard, setBoardAlpha]);
   const [laneMode, setLaneModeState] = useState<LaneMode>(loadLaneMode);
   const setLaneMode = useCallback((m: LaneMode) => { setLaneModeState(m); saveLaneMode(m); }, []);
   const [showTrophies, setShowTrophies] = useState(false);
@@ -558,7 +527,13 @@ export default function App() {
         {phase !== "menu" && (
           <Game key={gameKey} character={character} ballSkin={ball} pinStyle={pinStyle} theme={theme} laneMode={laneMode} bumpers={bumpers} onThrow={handleThrow} onScore={handleScore} onGameOver={handleGameOver} onStats={handleStats} />
         )}
-        {phase === "playing" && <StarBoard frames={frames} current={frame} />}
+        {phase === "playing" && <Scoreboard frames={frames} current={frame} score={score} style={board} alpha={boardAlpha} theme={getTheme(theme)} />}
+        {phase === "playing" && (
+          <WorldTools
+            open={toolMenu} setOpen={setToolMenu} theme={theme} setTheme={setTheme} themeDef={getTheme(theme)}
+            board={board} setBoard={setBoard} alpha={boardAlpha} setAlpha={setBoardAlpha}
+          />
+        )}
         <SoundSync sfx={appSfx} />
         {phase === "menu" && (
           <StartScreen onPick={pick} bumpers={bumpers} setBumpers={setBumpers} onTrophies={() => setShowTrophies(true)} best={profile.best} ball={ball} setBall={setBall} pinStyle={pinStyle} setPinStyle={setPinStyle} theme={theme} setTheme={setTheme} laneMode={laneMode} setLaneMode={setLaneMode} />
